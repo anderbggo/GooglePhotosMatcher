@@ -2,6 +2,8 @@
 
 Simple executable to match metadata from JSONs to original images/videos.
 
+Same work than [MetadataFixer](https://metadatafixer.com/pricing) but its free!
+
 ## Wiki 📖
 
 When you download the images from google photos, they lose some metadata such as the date and the coordinates in which they were taken.
