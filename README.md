@@ -54,3 +54,11 @@ Sometimes, the algorithm does not recognize the names of the images due to the p
 
 * **anderbggo** - Author
 * **Freepik** - Icon creator
+
+## Donations💰
+
+* BTC -> 14BJjSVqUcLKFkPHBHwNenm2j5qWcwqUyb
+* ETH -> 0x910c055988973b03b9c517bab62198e9ee550f65
+* USDT (TRC20) -> TRAp5UiRoEMvQVzd7d6wDHZg2Uwu6eVvaX
+* USDT (BEP20) -> 0x910c055988973b03b9c517bab62198e9ee550f65
+* LTC -> LcF2dm2gRqHMHLP4snQFb1zyaUwDfLb443
