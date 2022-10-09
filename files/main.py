@@ -3,7 +3,7 @@ import json
 from PIL import Image
 import PySimpleGUI as sg
 
-def mainProcess(browserPath, window):
+def mainProcess(browserPath, window, editedW):
     piexifCodecs = [k.casefold() for k in ['TIF', 'TIFF', 'JPEG', 'JPG']]
 
     mediaMoved = []  # array with names of all the media already matched
@@ -12,6 +12,8 @@ def mainProcess(browserPath, window):
     nonEditedMediaPath = path + "\EditedRaw"
     errorCounter = 0
     successCounter = 0
+    editedWord = editedW or "editado"
+    print(editedWord)
 
     try:
         obj = list(os.scandir(path))  #Convert iterator into a list to sort it
@@ -35,7 +37,7 @@ def mainProcess(browserPath, window):
             titleOriginal = data['title']  # Store metadata into vars
 
             try:
-                title = searchMedia(path, titleOriginal, mediaMoved, nonEditedMediaPath)
+                title = searchMedia(path, titleOriginal, mediaMoved, nonEditedMediaPath, editedWord)
 
             except Exception as e:
                 print("Error on searchMedia() with file " + titleOriginal)

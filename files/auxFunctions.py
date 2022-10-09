@@ -7,9 +7,9 @@ from fractions import Fraction
 
 
 # Function to search media associated to the JSON
-def searchMedia(path, title, mediaMoved, nonEdited):
+def searchMedia(path, title, mediaMoved, nonEdited, editedWord):
     title = fixTitle(title)
-    realTitle = str(title.rsplit('.', 1)[0] + "-editado." + title.rsplit('.', 1)[1])
+    realTitle = str(title.rsplit('.', 1)[0] + "-" + editedWord + "." + title.rsplit('.', 1)[1])
     filepath = path + "\\" + realTitle  # First we check if exists an edited version of the image
     if not os.path.exists(filepath):
         realTitle = str(title.rsplit('.', 1)[0] + "(1)." + title.rsplit('.', 1)[1])

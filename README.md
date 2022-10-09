@@ -14,13 +14,15 @@ This algorithm is able to match this information in the image/video from the dow
 
 1. Download your _Google Photos_ media from [Takeout](https://takeout.google.com/)
 
-2. Download and execute [GPMatcher.exe](GPMatcher.exe)
+2. Download and execute GPMatcher.exe
 
-3. Select the folder in which images/videos along with its JSONs were downloaded ('Photos from 2022' for example)
+3. [Optional] Type custom suffix used for edited photos (explained in the program)
 
-4. Click on _Match_ button
+4. Select the folder in which images/videos along with its JSONs were downloaded ('Photos from 2022' for example)
 
-5. Matched images/videos will be on directory _Matched_ inside the same path
+5. Click on _Match_ button
+
+6. Matched images/videos will be on directory _Matched_ inside the same path
 
 ## FAQs
 
