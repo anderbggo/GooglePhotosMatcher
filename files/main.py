@@ -51,8 +51,7 @@ def mainProcess(browserPath, window, editedW):
                 continue
 
             # METADATA EDITION
-
-            timeStamp = int(data['creationTime']['timestamp']) # Get creation time
+            timeStamp = int(data['photoTakenTime']['timestamp'])  # Get creation time
             print(filepath)
 
             if title.rsplit('.', 1)[1].casefold() in piexifCodecs:  # If EXIF is supported

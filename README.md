@@ -1,4 +1,4 @@
-# Google Photos Matcher (v 1.0)
+# Google Photos Matcher (v 1.2)
 
 Simple executable to match metadata from JSONs to original images/videos.
 
