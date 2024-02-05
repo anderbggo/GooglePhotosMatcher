@@ -2,9 +2,9 @@ import os
 import time
 from datetime import datetime
 import piexif
+import piexif.helper
 from win32_setctime import setctime
 from fractions import Fraction
-
 
 # Function to search media associated to the JSON
 def searchMedia(path, title, mediaMoved, nonEdited, editedWord):
@@ -106,7 +106,7 @@ def change_to_rational(number):
     return (f.numerator, f.denominator)
 
 
-def set_EXIF(filepath, lat, lng, altitude, timeStamp):
+def set_EXIF(filepath, lat, lng, altitude, description, timeStamp):
     exif_dict = piexif.load(filepath)
 
     dateTime = datetime.fromtimestamp(timeStamp).strftime("%Y:%m:%d %H:%M:%S")  # Create date object
@@ -114,9 +114,11 @@ def set_EXIF(filepath, lat, lng, altitude, timeStamp):
     exif_dict['Exif'][piexif.ExifIFD.DateTimeOriginal] = dateTime
     exif_dict['Exif'][piexif.ExifIFD.DateTimeDigitized] = dateTime
 
+    if(description != ""):
+        exif_dict['Exif'][piexif.ExifIFD.UserComment] = piexif.helper.UserComment.dump(description)
+
     exif_bytes = piexif.dump(exif_dict)
     piexif.insert(exif_bytes, filepath)
-
 
     try:
         exif_dict = piexif.load(filepath)

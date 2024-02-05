@@ -4,12 +4,12 @@ from PIL import Image
 import PySimpleGUI as sg
 
 def mainProcess(browserPath, window, editedW):
-    piexifCodecs = [k.casefold() for k in ['TIF', 'TIFF', 'JPEG', 'JPG']]
+    piexifCodecs = [k.casefold() for k in ['.TIF', '.TIFF', '.JPEG', '.JPG']]
 
     mediaMoved = []  # array with names of all the media already matched
     path = browserPath  # source path
-    fixedMediaPath = path + "\MatchedMedia"  # destination path
-    nonEditedMediaPath = path + "\EditedRaw"
+    fixedMediaPath = os.path.join(path, "MatchedMedia")  # destination path
+    nonEditedMediaPath = os.path.join(path, "EditedRaw")
     errorCounter = 0
     successCounter = 0
     editedWord = editedW or "editado"
@@ -44,7 +44,8 @@ def mainProcess(browserPath, window, editedW):
                 errorCounter += 1
                 continue
 
-            filepath = path + "\\" + title
+            filepath = os.path.join(path, title)
+            basefilename, file_extension = os.path.splitext(filepath)
             if title == "None":
                 print(titleOriginal + " not found")
                 errorCounter += 1
@@ -54,12 +55,12 @@ def mainProcess(browserPath, window, editedW):
             timeStamp = int(data['photoTakenTime']['timestamp'])  # Get creation time
             print(filepath)
 
-            if title.rsplit('.', 1)[1].casefold() in piexifCodecs:  # If EXIF is supported
+            if file_extension.casefold() in piexifCodecs:  # If EXIF is supported
                 try:
                     im = Image.open(filepath)
                     rgb_im = im.convert('RGB')
-                    os.replace(filepath, filepath.rsplit('.', 1)[0] + ".jpg")
-                    filepath = filepath.rsplit('.', 1)[0] + ".jpg"
+                    os.replace(filepath, basefilename + ".jpg")
+                    filepath = basefilename + ".jpg"
                     rgb_im.save(filepath)
 
                 except ValueError as e:
@@ -68,10 +69,10 @@ def mainProcess(browserPath, window, editedW):
                     continue
 
                 try:
-                    set_EXIF(filepath, data['geoData']['latitude'], data['geoData']['longitude'], data['geoData']['altitude'], timeStamp)
+                    set_EXIF(filepath, data['geoData']['latitude'], data['geoData']['longitude'], data['geoData']['altitude'], data['description'], timeStamp)
 
                 except Exception as e:  # Error handler
-                    print("Inexistent EXIF data for " + filepath)
+                    print("Nonexistent EXIF data for " + filepath)
                     print(str(e))
                     errorCounter += 1
                     continue
@@ -80,8 +81,8 @@ def mainProcess(browserPath, window, editedW):
 
             #MOVE FILE AND DELETE JSON
 
-            os.replace(filepath, fixedMediaPath + "\\" + title)
-            os.remove(path + "\\" + entry.name)
+            os.replace(filepath, os.path.join(fixedMediaPath, title))
+            os.remove(os.path.join(path, entry.name))
             mediaMoved.append(title)
             successCounter += 1
 

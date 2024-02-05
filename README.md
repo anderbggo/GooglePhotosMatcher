@@ -1,14 +1,14 @@
-# Google Photos Matcher (v 1.2)
+# Google Photos Matcher (v 1.3)
 
 Simple executable to match metadata from JSONs to original images/videos.
 
-Same work than [MetadataFixer](https://metadatafixer.com/pricing) but its free!
+Same work as [MetadataFixer](https://metadatafixer.com/pricing), but it's free!
 
 ## Wiki 📖
 
-When you download the images from google photos, they lose some metadata such as the date and the coordinates in which they were taken.
+When you use Takeout and download your images from Google Photos, they lose some metadata such as the date and the coordinates in which they were taken, with the details being moved to json files instead.
 
-This algorithm is able to match this information in the image/video from the downloaded JSONs
+This app will match the images/videos to the json files and update their metadata to match. Currently restricted to lat/long/altitude, and description.
 
 ## Usage
 
@@ -55,6 +55,7 @@ Sometimes, the algorithm does not recognize the names of the images due to the p
 ## Contributors ✒️
 
 * **anderbggo** - Author
+* **atkulp** - Contributor
 * **Freepik** - Icon creator
 
 ## Donations💰
