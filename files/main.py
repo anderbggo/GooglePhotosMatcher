@@ -57,6 +57,7 @@ def mainProcess(browserPath, window, editedW):
             if title.rsplit('.', 1)[1].casefold() in piexifCodecs:  # If EXIF is supported
                 try:
                     im = Image.open(filepath)
+                    im.close()
                     rgb_im = im.convert('RGB')
                     os.replace(filepath, filepath.rsplit('.', 1)[0] + ".jpg")
                     filepath = filepath.rsplit('.', 1)[0] + ".jpg"
