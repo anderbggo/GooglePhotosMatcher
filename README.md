@@ -71,15 +71,13 @@ Special characters in filenames can prevent the algorithm from matching them. To
    pip install -r "requirements-dev.txt"
    ```
 
-2. Download **exiftool** for Windows (64-bit): [direct download](https://sourceforge.net/projects/exiftool/files/exiftool-13.55_64.zip/download) or visit [exiftool.org](https://exiftool.org/)
+2. _(Optional)_ Download **exiftool** for Windows (64-bit): [direct download](https://sourceforge.net/projects/exiftool/files/exiftool-13.55_64.zip/download) or visit [exiftool.org](https://exiftool.org/)
 
-3. Rename `exiftool(-k).exe` → `exiftool.exe`
+3. _(Optional)_ If you want to bundle ExifTool into the EXE, rename `exiftool(-k).exe` → `exiftool.exe` and place it alongside the `exiftool_files` folder at the project root.
 
-4. Place `exiftool.exe` and the `exiftool_files` folder at the root of the project
-
-5. Run this command from the project root:
+4. Run this command from the project root:
    ```
-   pyinstaller --noconsole --onefile --clean --hidden-import PySimpleGUI --icon=assets/photo.ico --name "GPMatcher" --distpath "." --add-data "exiftool.exe;." --add-data "assets/photo.ico;." --paths files files/window.py
+   pyinstaller --noconsole --onefile --clean --hidden-import PySimpleGUI --icon=assets/photo.ico --name "GPMatcher" --distpath "." --add-data "assets/photo.ico;." --paths files files/window.py
    ```
 
 `GPMatcher.exe` will appear at the project root — ready to use!
