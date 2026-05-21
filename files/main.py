@@ -7,7 +7,7 @@ def log(window, msg):
     window.write_event_value('-LOG-', msg)
     print(msg)
 
-def mainProcess(browserPath, window, editedW):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None):
     # Supported extensions
     piexifCodecs = [k.casefold() for k in ['TIF', 'TIFF', 'JPEG', 'JPG']] #TODO: PNG ?
     videoCodecs = [k.casefold() for k in ['MP4', 'MOV', '3GP', 'M4V', 'MKV']]
@@ -184,7 +184,16 @@ def mainProcess(browserPath, window, editedW):
             if ext in piexifCodecs:
                 set_photo_metadata(filepath, lat, lng, alt, timeStamp, description)
             elif ext in videoCodecs:
-                set_video_metadata(filepath, lat, lng, alt, timeStamp, description, camera_make, camera_model, "", software)
+                try:
+                    set_video_metadata(filepath, lat, lng, alt, timeStamp, description, camera_make, camera_model, "", software, exiftool_path=exiftoolPath)
+                except FileNotFoundError as e:
+                    log(window, str(e))
+                    errorCounter += 1
+                    continue
+                except Exception as e:
+                    log(window, f"VIDEO METADATA ERROR: {e}")
+                    errorCounter += 1
+                    continue
 
             setWindowsTime(filepath, timeStamp)
 

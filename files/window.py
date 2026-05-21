@@ -161,6 +161,29 @@ folder_panel = panel(
     ]
 )
 
+exiftool_panel = panel(
+    [
+        [sg.Text("ExifTool path", font=("Segoe UI Semibold", 13), background_color=PALETTE["panel"], text_color=PALETTE["text"])],
+        [sg.Text("Optional. If you already have ExifTool installed. Browse to exiftool.exe.", background_color=PALETTE["panel"], text_color=PALETTE["muted"], pad=((0, 0), (6, 12)))],
+        [
+            sg.Input(
+                key="-EXIFTOOL_PATH-",
+                expand_x=True,
+                border_width=0,
+                background_color=PALETTE["input_bg"],
+                text_color=PALETTE["text"],
+                pad=((0, 12), (0, 0)),
+            ),
+            sg.FileBrowse(
+                "Browse",
+                target="-EXIFTOOL_PATH-",
+                file_types=([("Executable", "*.exe")]),
+                button_color=(PALETTE["text"], PALETTE["panel_alt"]),
+            ),
+        ],
+    ]
+)
+
 action_panel = panel(
     [
         [sg.Button("Start matching", key="Match", size=(16, 1), border_width=0, mouseover_colors=(PALETTE["text"], PALETTE["accent"]))],
@@ -193,7 +216,7 @@ status_panel = panel(
 )
 
 layout = [
-    [sg.Column([[header], [settings_panel], [folder_panel], [action_panel], [status_panel]], background_color=PALETTE["bg"], expand_x=True, pad=(0, 0))],
+    [sg.Column([[header], [settings_panel], [folder_panel], [exiftool_panel], [action_panel], [status_panel]], background_color=PALETTE["bg"], expand_x=True, pad=(0, 0))],
 ]
 
 window = sg.Window(
@@ -225,7 +248,7 @@ while True:
         # Start processing in a separate thread to keep UI responsive
         threading.Thread(
             target=mainProcess, 
-            args=(values["-IN2-"], window, values['-INPUT_TEXT-']), 
+            args=(values["-IN2-"], window, values['-INPUT_TEXT-'], values['-EXIFTOOL_PATH-']), 
             daemon=True
         ).start()
 

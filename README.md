@@ -23,13 +23,15 @@ When you download media from Google Photos via Takeout, the files lose important
 
 3. _(Optional)_ Enter the custom suffix used for edited photos (explained inside the app)
 
-4. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
+4. _(Optional)_ Select the path for ExifTool.exe if it gets stuck matching videos. Extract it from [here](https://sourceforge.net/projects/exiftool/files/)
+
+5. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
 
    > The app will automatically scan all subfolders
 
-5. Click the **Match** button
+6. Click the **Match** button
 
-6. Your matched files will appear in a `Matched` folder inside the selected directory
+7. Your matched files will appear in a `Matched` folder inside the selected directory
 
 ---
 
