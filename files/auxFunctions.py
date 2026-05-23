@@ -17,8 +17,13 @@ def resource_path(relative_path: str) -> str:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-def get_exiftool_path() -> str:
+def get_exiftool_path(exiftool_path=None) -> str | None:
     """ Retrieves the path for the ExifTool binary """
+    if exiftool_path:
+        if os.path.isfile(exiftool_path):
+            return exiftool_path
+        raise FileNotFoundError(f"ExifTool not found at {exiftool_path}")
+
     if hasattr(sys, 'frozen'):
         # in .exe
         base_path = os.path.dirname(sys.executable)
@@ -28,11 +33,10 @@ def get_exiftool_path() -> str:
         
     exiftool_exe = os.path.join(base_path, "exiftool.exe")
     
-    if not os.path.isfile(exiftool_exe):
-        logging.error(f"Exiftool not found at {exiftool_exe}")
-        sys.exit(1)
-        
-    return exiftool_exe
+    if os.path.isfile(exiftool_exe):
+        return exiftool_exe
+
+    return None
 
 
 
@@ -218,7 +222,7 @@ def set_photo_metadata(filepath, lat, lng, altitude, timeStamp, description=""):
         exif_bytes = piexif.dump(clean_dict)
     piexif.insert(exif_bytes, filepath)
 
-def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", camera_make="", camera_model="", author="", software=""):
+def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", camera_make="", camera_model="", author="", software="", exiftool_path=None):
     """Injects metadata into video files using ExifTool"""
     dateTime = datetime.fromtimestamp(timeStamp).strftime("%Y:%m:%d %H:%M:%S")
 
@@ -252,7 +256,11 @@ def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
         tags["CreatorTool"] = software
         tags["HandlerDescription"] = software
 
-    exiftool_path = get_exiftool_path()
+    exiftool_path = get_exiftool_path(exiftool_path)
+    if not exiftool_path:
+        print(f"ExifTool not found, skipping metadata injection for {filepath}")
+        return
+
     args = [exiftool_path, "-overwrite_original"]
     for key, value in tags.items():
         if value != "" and value != 0 and value != 0.0:

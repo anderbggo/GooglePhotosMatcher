@@ -23,13 +23,15 @@ When you download media from Google Photos via Takeout, the files lose important
 
 3. _(Optional)_ Enter the custom suffix used for edited photos (explained inside the app)
 
-4. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
+4. _(Optional)_ Select the path for ExifTool.exe if it gets stuck matching videos. Extract it from [here](https://sourceforge.net/projects/exiftool/files/)
+
+5. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
 
    > The app will automatically scan all subfolders
 
-5. Click the **Match** button
+6. Click the **Match** button
 
-6. Your matched files will appear in a `Matched` folder inside the selected directory
+7. Your matched files will appear in a `Matched` folder inside the selected directory
 
 ---
 
@@ -69,15 +71,13 @@ Special characters in filenames can prevent the algorithm from matching them. To
    pip install -r "requirements-dev.txt"
    ```
 
-2. Download **exiftool** for Windows (64-bit): [direct download](https://sourceforge.net/projects/exiftool/files/exiftool-13.55_64.zip/download) or visit [exiftool.org](https://exiftool.org/)
+2. _(Optional)_ Download **exiftool** for Windows (64-bit): [direct download](https://sourceforge.net/projects/exiftool/files/exiftool-13.55_64.zip/download) or visit [exiftool.org](https://exiftool.org/)
 
-3. Rename `exiftool(-k).exe` → `exiftool.exe`
+3. _(Optional)_ If you want to bundle ExifTool into the EXE, rename `exiftool(-k).exe` → `exiftool.exe` and place it alongside the `exiftool_files` folder at the project root.
 
-4. Place `exiftool.exe` and the `exiftool_files` folder at the root of the project
-
-5. Run this command from the project root:
+4. Run this command from the project root:
    ```
-   pyinstaller --noconsole --onefile --clean --hidden-import PySimpleGUI --icon=assets/photo.ico --name "GPMatcher" --distpath "." --add-data "exiftool.exe;." --add-data "assets/photo.ico;." --paths files files/window.py
+   pyinstaller --noconsole --onefile --clean --hidden-import PySimpleGUI --icon=assets/photo.ico --name "GPMatcher" --distpath "." --add-data "assets/photo.ico;." --paths files files/window.py
    ```
 
 `GPMatcher.exe` will appear at the project root — ready to use!
