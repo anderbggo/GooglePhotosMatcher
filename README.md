@@ -1,4 +1,4 @@
-# Google Photos Matcher (v2.0)
+# Google Photos Matcher (v2.1)
 
 > Simple tool to restore metadata (date, GPS coordinates, etc.) from Google Photos JSON files back into your original images and videos — just like [MetadataFixer](https://metadatafixer.com/pricing), but **free and open source**!
 >
@@ -100,6 +100,7 @@ Special characters in filenames can prevent the algorithm from matching them. To
 
 - **[anderbggo](https://github.com/anderbggo)** — Author
 - **[Kadawatcha](https://github.com/Kadawatcha)** — Contributor
+- **[Golde2341](https://github.com/Golde2341)** — Contributor
 
 ## Buy me a coffee ☕
 
