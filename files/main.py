@@ -233,11 +233,18 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None):
                     continue
 
             if paired_video_path:
-                content_identifier = get_content_identifier(filepath, exiftool_path=exiftoolPath)
-                if content_identifier:
-                    set_content_identifier(paired_video_path, content_identifier, exiftool_path=exiftoolPath)
-                set_video_metadata(paired_video_path, lat, lng, alt, timeStamp, description, camera_make, camera_model, "", software, exiftool_path=exiftoolPath)
-                setWindowsTime(paired_video_path, timeStamp)
+                try:
+                    content_identifier = get_content_identifier(filepath, exiftool_path=exiftoolPath)
+                    if content_identifier:
+                        set_content_identifier(paired_video_path, content_identifier, exiftool_path=exiftoolPath)
+                    set_video_metadata(paired_video_path, lat, lng, alt, timeStamp, description, camera_make, camera_model, "", software, exiftool_path=exiftoolPath)
+                    setWindowsTime(paired_video_path, timeStamp)
+                except FileNotFoundError as e:
+                    log(window, str(e))
+                    errorCounter += 1
+                except Exception as e:
+                    log(window, f"LIVE PHOTO PAIRING ERROR: {e}")
+                    errorCounter += 1
 
             setWindowsTime(filepath, timeStamp)
 
@@ -253,10 +260,10 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None):
                         os.replace(raw_path, os.path.join(nonEditedMediaPath, raw_title))
                         mediaMoved[current_dir].append(raw_title)
 
-                if paired_video_path and paired_video_title:
-                    os.replace(paired_video_path, os.path.join(fixedMediaPath, paired_video_title))
-                    mediaMoved[current_dir].append(paired_video_title)
-                
+            if paired_video_path and paired_video_title and os.path.exists(paired_video_path):
+                os.replace(paired_video_path, os.path.join(fixedMediaPath, paired_video_title))
+                mediaMoved[current_dir].append(paired_video_title)
+
             os.remove(json_path)
             successCounter += 1
             

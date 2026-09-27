@@ -307,6 +307,7 @@ def get_content_identifier(filepath, exiftool_path=None):
             [xattr_path, "-p", "com.apple.quicktime.content.identifier", filepath],
             capture_output=True,
             check=False,
+            timeout=30,
         )
         if result.returncode == 0 and result.stdout:
             return result.stdout.decode(errors="replace").strip()
