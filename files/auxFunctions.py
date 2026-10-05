@@ -3,11 +3,17 @@ import sys
 import time
 import piexif
 import subprocess
+import platform
+import shutil
 from datetime import datetime
-from win32_setctime import setctime
 from fractions import Fraction
 import glob
 import logging
+
+if platform.system() == "Windows":
+    from win32_setctime import setctime
+else:
+    setctime = None
 
 def resource_path(relative_path: str) -> str:
     """ Finds the actual path to the resource file for PyInstaller (_MEIPASS) """
@@ -31,10 +37,16 @@ def get_exiftool_path(exiftool_path=None) -> str | None:
         # in py
         base_path = os.path.abspath(".")
         
-    exiftool_exe = os.path.join(base_path, "exiftool.exe")
-    
-    if os.path.isfile(exiftool_exe):
-        return exiftool_exe
+    exiftool_names = ["exiftool.exe", "exiftool"] if platform.system() == "Windows" else ["exiftool"]
+    for exiftool_name in exiftool_names:
+        candidate = os.path.join(base_path, exiftool_name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    if platform.system() != "Windows":
+        candidate = shutil.which("exiftool")
+        if candidate:
+            return candidate
 
     return None
 
@@ -137,14 +149,22 @@ def checkIfSameName(title: str, titleFixed, mediaMoved, recursionTime):
         return titleFixed
 
 def setWindowsTime(filepath, timeStamp):
-    """Sets the Windows file creation and modification timestamps"""
+    """Sets file timestamps, including macOS creation time when available."""
     try:
-        setctime(filepath, timeStamp)
         date = datetime.fromtimestamp(timeStamp)
         modTime = time.mktime(date.timetuple())
         os.utime(filepath, (modTime, modTime))
+        if setctime is not None:
+            setctime(filepath, timeStamp)
+        elif platform.system() == "Darwin" and shutil.which("SetFile"):
+            creation_date = date.strftime("%m/%d/%Y %H:%M:%S")
+            subprocess.run(
+                ["SetFile", "-d", creation_date, filepath],
+                check=False,
+                capture_output=True,
+            )
     except Exception as e:
-        print(f"Error setting Windows time for {filepath}: {e}")
+        print(f"Error setting file time for {filepath}: {e}")
 
 # GPS & MATH CONVERSIONS
 def to_deg(value, loc):
@@ -272,9 +292,57 @@ def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
             args,
             timeout=30,
             capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            **({"creationflags": subprocess.CREATE_NO_WINDOW} if platform.system() == "Windows" else {}),
         )
     except subprocess.TimeoutExpired:
         print(f"ExifTool TIMEOUT (30s) for {filepath}, skipping.")
     except Exception as e:
         print(f"ExifTool error for {filepath}: {e}")
+
+def get_content_identifier(filepath, exiftool_path=None):
+    """Reads an Apple Live Photo identifier from a HEIC file."""
+    xattr_path = shutil.which("xattr")
+    if xattr_path:
+        result = subprocess.run(
+            [xattr_path, "-p", "com.apple.quicktime.content.identifier", filepath],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout.decode(errors="replace").strip()
+
+    exiftool_path = get_exiftool_path(exiftool_path)
+    if not exiftool_path:
+        return None
+
+    result = subprocess.run(
+        [exiftool_path, "-s3", "-Apple:ContentIdentifier", filepath],
+        timeout=30,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout:
+        return result.stdout.decode(errors="replace").strip() or None
+    return None
+
+def set_content_identifier(filepath, identifier, exiftool_path=None):
+    """Sets a copied Apple Live Photo identifier on a video file."""
+    exiftool_path = get_exiftool_path(exiftool_path)
+    if not exiftool_path:
+        raise FileNotFoundError("ExifTool not found; it is required to pair Live Photos")
+    args = [exiftool_path, "-m", "-overwrite_original", "-Keys:ContentIdentifier=" + identifier, filepath]
+
+    try:
+        subprocess.run(
+            args,
+            timeout=30,
+            capture_output=True,
+            check=True,
+            **({"creationflags": subprocess.CREATE_NO_WINDOW} if platform.system() == "Windows" else {}),
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Metadata tool TIMEOUT (30s) while setting ContentIdentifier for {filepath}")
+    except subprocess.CalledProcessError as e:
+        details = e.stderr.decode(errors="replace").strip() if e.stderr else ""
+        raise RuntimeError(f"ExifTool failed to set ContentIdentifier for {filepath}: {details}") from e

@@ -1,7 +1,7 @@
 import os
 import json
 import PySimpleGUI as sg
-from auxFunctions import searchMedia, fixTitle, set_photo_metadata, set_video_metadata, setWindowsTime
+from auxFunctions import searchMedia, fixTitle, set_photo_metadata, set_video_metadata, get_content_identifier, set_content_identifier, setWindowsTime
 def log(window, msg):
     """Send a log message to the UI"""
     window.write_event_value('-LOG-', msg)
@@ -180,7 +180,44 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None):
             ext = title.rsplit('.', 1)[1].casefold() if '.' in title else ""
 
 
-            # Set metadatas
+            # Set metadata for Live Photos
+            paired_video_path = None
+            paired_video_title = None
+            if ext in {"heic", "heif", "jpg", "jpeg"}:
+                media_stem = os.path.splitext(title)[0]
+                video_stems = {f"{media_stem}.mp4".casefold(), f"{media_stem}.mov".casefold()}
+                for filename in os.listdir(current_dir):
+                    if filename.casefold() in video_stems:
+                        paired_video_path = os.path.join(current_dir, filename)
+                        paired_video_title = filename
+                        break
+
+            if ext in {"mp4", "mov"}:
+                media_stem = os.path.splitext(title)[0]
+                heic_path = next(
+                    (
+                        candidate
+                        for candidate in (
+                            os.path.join(current_dir, media_stem + ".heic"),
+                            os.path.join(current_dir, media_stem + ".HEIC"),
+                            os.path.join(fixedMediaPath, media_stem + ".heic"),
+                            os.path.join(fixedMediaPath, media_stem + ".HEIC"),
+                            os.path.join(fixedMediaPath, media_stem + ".jpg"),
+                            os.path.join(fixedMediaPath, media_stem + ".JPG"),
+                            os.path.join(fixedMediaPath, media_stem + ".jpeg"),
+                            os.path.join(fixedMediaPath, media_stem + ".JPEG"),
+                        )
+                        if os.path.exists(candidate)
+                    ),
+                    None,
+                )
+                if heic_path:
+                    content_identifier = get_content_identifier(heic_path, exiftool_path=exiftoolPath)
+                    if content_identifier:
+                        set_content_identifier(filepath, content_identifier, exiftool_path=exiftoolPath)
+                    else:
+                        log(window, f"LIVE PHOTO IDENTIFIER NOT FOUND: {os.path.basename(heic_path)}")
+
             if ext in piexifCodecs:
                 set_photo_metadata(filepath, lat, lng, alt, timeStamp, description)
             elif ext in videoCodecs:
@@ -195,6 +232,20 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None):
                     errorCounter += 1
                     continue
 
+            if paired_video_path:
+                try:
+                    content_identifier = get_content_identifier(filepath, exiftool_path=exiftoolPath)
+                    if content_identifier:
+                        set_content_identifier(paired_video_path, content_identifier, exiftool_path=exiftoolPath)
+                    set_video_metadata(paired_video_path, lat, lng, alt, timeStamp, description, camera_make, camera_model, "", software, exiftool_path=exiftoolPath)
+                    setWindowsTime(paired_video_path, timeStamp)
+                except FileNotFoundError as e:
+                    log(window, str(e))
+                    errorCounter += 1
+                except Exception as e:
+                    log(window, f"LIVE PHOTO PAIRING ERROR: {e}")
+                    errorCounter += 1
+
             setWindowsTime(filepath, timeStamp)
 
             if not already_moved:
@@ -208,7 +259,11 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None):
                     if os.path.exists(raw_path):
                         os.replace(raw_path, os.path.join(nonEditedMediaPath, raw_title))
                         mediaMoved[current_dir].append(raw_title)
-                
+
+            if paired_video_path and paired_video_title and os.path.exists(paired_video_path):
+                os.replace(paired_video_path, os.path.join(fixedMediaPath, paired_video_title))
+                mediaMoved[current_dir].append(paired_video_title)
+
             os.remove(json_path)
             successCounter += 1
             

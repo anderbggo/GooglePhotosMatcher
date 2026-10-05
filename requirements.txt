@@ -7,5 +7,5 @@ PyExifTool==0.5.6
 pysimplegui==4.60.5.1
 
 # Others
-win32_setctime==1.2.0
+win32_setctime==1.2.0; sys_platform == "win32"
 packaging==26.0
