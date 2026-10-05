@@ -106,6 +106,7 @@ Special characters in filenames can prevent the algorithm from matching them. To
 - **[anderbggo](https://github.com/anderbggo)** — Author
 - **[Kadawatcha](https://github.com/Kadawatcha)** — Contributor
 - **[Golde2341](https://github.com/Golde2341)** — Contributor
+- **[MoonjunGong](https://github.com/MoonjunGong)** — Contributor
 
 ## Buy me a coffee ☕
 
