@@ -1,6 +1,6 @@
 # Google Photos Matcher (v3.0)
 
-**[Download for Windows (v3.0)](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.0/GPMatcher.exe)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.0)
+**[Download for Windows (v3.0)](https://anderbggo.github.io/gpmatcher)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.0)
 
 Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup required.
 
