@@ -252,6 +252,18 @@ class PreferenceTests(unittest.TestCase):
         self.assertEqual(localize_message("ERROR: photo.jpg | Missing photo timestamp", "es"), "ERROR: photo.jpg | Falta la fecha de la foto")
         self.assertEqual(localize_message("ERROR: Scanning: photo.jpg | Missing photo timestamp", "es"), "ERROR: Scanning: photo.jpg | Falta la fecha de la foto")
 
+    def test_v31_warnings_describe_output_locations_and_force_report(self):
+        from translations import text
+
+        for language in ("en", "es"):
+            with self.subTest(language=language):
+                backup = text(language, "backup_message")
+                for value in ("MatchedMedia", "EditedRaw", "photo(1).jpg"):
+                    self.assertIn(value, backup)
+                forced = text(language, "force_message")
+                for value in ("MatchedMedia/ForcedMatches", "EditedRaw/ForcedMatches", "Live Photos", "CSV"):
+                    self.assertIn(value, forced)
+
     def test_windows_defaults_read_application_theme_and_ui_language(self):
         from preferences import system_language, system_theme
 

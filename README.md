@@ -1,16 +1,16 @@
 # Google Photos Matcher (v3.1)
 
-**[Download for Windows (v3.1)](https://anderbggo.github.io/gpmatcher)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.0)
+**[Download for Windows (v3.1)](https://anderbggo.github.io/gpmatcher/)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.1)
 
 Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup required.
 
 > Simple tool to restore metadata (date, GPS coordinates, etc.) from Google Photos JSON files back into your original images and videos — just like [MetadataFixer](https://metadatafixer.com/pricing), but **free and open source**!
 >
-> <img width="900" height="680" alt="Google Photos Matcher v3.0 light interface" src="assets/interface-v3.png" />
+> <img width="900" height="680" alt="Google Photos Matcher v3.1 light interface" src="assets/interface-v3.png?v=3.1" />
 
 <details>
 <summary>Dark mode and Spanish interface</summary>
-<img width="900" height="680" alt="Google Photos Matcher v3.0 dark interface in Spanish" src="assets/interface-v3-dark.png" />
+<img width="900" height="680" alt="Google Photos Matcher v3.1 dark interface in Spanish" src="assets/interface-v3-dark.png?v=3.1" />
 </details>
 
 
@@ -22,7 +22,7 @@ When you download media from Google Photos via Takeout, the files lose important
 
 **GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. Successfully restored media are moved into a single flat `MatchedMedia` folder, while original versions of edited photos go into `EditedRaw`; the export's year/album subfolders are not recreated. If two files share a name, the later one gets a number (`photo(1).jpg`). JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
 
-**Make a backup before using Match.** There is no automatic copy or undo: if writing fails partway through, some metadata may already have changed. The app displays a confirmation before every Match run; Preview does not modify or move media.
+**Make a backup before using Match or Force match.** There is no automatic copy or undo: if writing fails partway through, some metadata may already have changed. Force match may remove existing camera or lens metadata as a last resort. The app displays a confirmation before every Match or Force match run; Preview does not modify or move media.
 
 Matching uses both the JSON filename and its `title`, including numbered duplicates, supplemental metadata suffixes, case differences, Unicode normalization, edited versions, and recognizable Takeout truncation patterns. Ambiguous matches are reported instead of guessed.
 
@@ -40,7 +40,7 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 4. Click **Preview** to inspect the matching plan without writing media, or **Match** to process it. Before Match starts, the app recommends a backup and asks for explicit confirmation. **Cancel** stops after the current file is completed.
 
-5. Restored media appear in `MatchedMedia`; original versions of edited photos are stored in `EditedRaw`. JSON files for successful matches are deleted, not copied into the output. Failed media stay in their original folders with their JSON. Click **Open results** or **Open report** to inspect the output. The CSV report lists only errors, with the JSON, affected media, and cause. Successful matches, previews, skipped sidecars, and unmatched media are omitted from the CSV; the app's counters still show the complete summary. If there are no errors, the CSV contains its column headers only.
+5. Restored media appear in `MatchedMedia`; original versions of edited photos are stored in `EditedRaw`. JSON files for successful matches are deleted, not copied into the output. Failed media stay in their original folders with their JSON. Click **Open results** or **Open report** to inspect the output. The CSV report lists errors and failed Force match attempts, with the JSON, affected media, and cause. Failed Force match attempts count as unmatched but are included in the CSV. Successful matches, previews, skipped sidecars, and other unmatched media are omitted; the Matched, Errors and Unmatched counters still show the complete summary. If there are no reportable failures, the CSV contains its column headers only.
 
 6. If a Match run ends with errors or unmatched files, a **Force match** button appears. See [Force match](#force-match) below.
 
@@ -79,7 +79,7 @@ Common edited-photo suffixes are detected automatically, including `editado`, `e
 
 ### Why do some files stay unmatched?
 
-Open the CSV report to see the reason. Recognizable special characters and duplicate-name patterns are handled automatically. If several files are plausible, GPMatcher does not modify them. Missing media, conflicting sidecars, invalid timestamps/GPS, unsupported formats, and ExifTool errors are reported explicitly. Failed writes retain the original location and JSON, but may have partially updated metadata; restore from your backup if needed. Many of these cases can be retried with [Force match](#force-match).
+Check the activity log and counters; the CSV lists errors and failed Force match attempts, not every unmatched file. Recognizable special characters and duplicate-name patterns are handled automatically. If several files are plausible, GPMatcher does not modify them. Missing media, conflicting sidecars, invalid timestamps/GPS, unsupported formats, and ExifTool errors are reported explicitly. Failed writes retain the original location and JSON, but may have partially updated metadata; restore from your backup if needed. Many of these cases can be retried with [Force match](#force-match).
 
 ### Do the photos already contain metadata?
 
