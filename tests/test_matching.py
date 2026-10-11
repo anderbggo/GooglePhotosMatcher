@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
 from types import SimpleNamespace
@@ -18,7 +19,9 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "files"))
 
-from auxFunctions import AmbiguousMatchError, EDITED_SUFFIXES, MediaMatcher, get_content_identifier, get_exiftool_path, searchMedia, set_image_metadata, set_photo_metadata, set_video_metadata, setWindowsTime
+from exiftool_runner import get_exiftool_path
+from matching import AmbiguousMatchError, EDITED_SUFFIXES, MediaMatcher, searchMedia
+from metadata import get_content_identifier, set_image_metadata, set_photo_metadata, set_video_metadata, setWindowsTime
 from main import mainProcess
 from build import EXIFTOOL_VERSION, ROOT, build_command, prepare_exiftool
 
@@ -149,7 +152,7 @@ class ExifToolDiscoveryTests(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.touch()
             path.chmod(0o755)
-            with patch.object(sys, "_MEIPASS", folder, create=True), patch.object(sys, "frozen", True, create=True), patch("auxFunctions.platform.system", return_value="Windows"), patch("auxFunctions.shutil.which", return_value="other-exiftool"):
+            with patch.object(sys, "_MEIPASS", folder, create=True), patch.object(sys, "frozen", True, create=True), patch("exiftool_runner.platform.system", return_value="Windows"), patch("exiftool_runner.shutil.which", return_value="other-exiftool"):
                 self.assertEqual(get_exiftool_path(), str(path))
 
     def test_explicit_path_can_override_bundled_exiftool(self):
@@ -162,7 +165,7 @@ class ExifToolDiscoveryTests(unittest.TestCase):
 
     def test_path_installation_remains_a_fallback(self):
         with tempfile.TemporaryDirectory() as folder:
-            with patch.object(sys, "_MEIPASS", folder, create=True), patch("auxFunctions.shutil.which", return_value="installed-exiftool"):
+            with patch.object(sys, "_MEIPASS", folder, create=True), patch("exiftool_runner.shutil.which", return_value="installed-exiftool"):
                 self.assertEqual(get_exiftool_path(), "installed-exiftool")
 
 
@@ -242,7 +245,7 @@ class PreferenceTests(unittest.TestCase):
             self.assertEqual(load_preferences(path), {"theme": "system", "language": "system"})
 
     def test_translation_keys_match_and_filenames_are_preserved(self):
-        from preferences import TEXT, localize_message
+        from translations import TEXT, localize_message
 
         self.assertEqual(set(TEXT["en"]), set(TEXT["es"]))
         self.assertEqual(localize_message("RESTORED: Photos/ERROR-photo.jpg", "es"), "RESTAURADO: Photos/ERROR-photo.jpg")
@@ -263,7 +266,7 @@ class PreferenceTests(unittest.TestCase):
             self.assertEqual(system_language(), "en")
 
     def test_spanish_number_format(self):
-        from preferences import format_number
+        from translations import format_number
 
         self.assertEqual(format_number(1248, "es"), "1.248")
         self.assertEqual(format_number(1248, "en"), "1,248")
@@ -273,7 +276,7 @@ class PreferenceTests(unittest.TestCase):
 
         instance = MagicMock()
         instance.gpm_language = "es"
-        widgets = {key: MagicMock() for key in ("-MATCHED-", "-EXISTING-", "-ERRORS-", "-UNMATCHED-", "-PROGRESS_LABEL-", "-LOG-", "Results", "Report", "Match", "Preview", "Cancel", "-IN2-", "-BROWSE_FOLDER-", "-PROGRESS_BAR-")}
+        widgets = {key: MagicMock() for key in ("-MATCHED-", "-ERRORS-", "-UNMATCHED-", "-PROGRESS_LABEL-", "-LOG-", "Results", "Report", "Match", "Preview", "Force", "Cancel", "-IN2-", "-BROWSE_FOLDER-", "-PROGRESS_BAR-")}
         instance.__getitem__.side_effect = widgets.__getitem__
         summary = {"restored": 1248}
         instance.read.side_effect = [("-LOG-", {"-LOG-": "RESTORED: photo.jpg"}), ("-UPDATE_SUMMARY-", {"-UPDATE_SUMMARY-": summary}), ("-UPDATE_DONE-", {}), (ui.sg.WIN_CLOSED, {})]
@@ -321,12 +324,12 @@ class V3InterfaceTests(unittest.TestCase):
         import window as ui
 
         instance = MagicMock()
-        widgets = {key: MagicMock() for key in ("-MATCHED-", "-EXISTING-", "-ERRORS-", "-UNMATCHED-", "Results", "Report")}
+        widgets = {key: MagicMock() for key in ("-MATCHED-", "-ERRORS-", "-UNMATCHED-", "Results", "Report")}
         instance.__getitem__.side_effect = widgets.__getitem__
         instance.read.side_effect = [("-UPDATE_SUMMARY-", {"-UPDATE_SUMMARY-": {"restored": 1248, "already_restored": 36, "error": 2, "unmatched": 4}}), (ui.sg.WIN_CLOSED, {})]
         with patch("window.build_window", return_value=instance):
             ui.run_app()
-        for key, value in (("-MATCHED-", "1,248"), ("-EXISTING-", "36"), ("-ERRORS-", "2"), ("-UNMATCHED-", "4")):
+        for key, value in (("-MATCHED-", "1,284"), ("-ERRORS-", "2"), ("-UNMATCHED-", "4")):
             widgets[key].update.assert_called_once_with(value)
 
     def test_live_counts_update_before_final_summary(self):
@@ -334,7 +337,7 @@ class V3InterfaceTests(unittest.TestCase):
 
         instance = MagicMock()
         instance.gpm_language = "es"
-        widgets = {key: MagicMock() for key in ("-MATCHED-", "-EXISTING-", "-ERRORS-", "-UNMATCHED-")}
+        widgets = {key: MagicMock() for key in ("-MATCHED-", "-ERRORS-", "-UNMATCHED-")}
         instance.__getitem__.side_effect = widgets.__getitem__
         first = {"restored": 1, "error": 0, "unmatched": 2}
         second = {"restored": 1248, "error": 3, "unmatched": 1}
@@ -350,7 +353,7 @@ class V3InterfaceTests(unittest.TestCase):
         from window import PALETTE, _set_busy
 
         instance = MagicMock()
-        widgets = {key: MagicMock() for key in ("Preview", "Match", "-IN2-", "-BROWSE_FOLDER-", "Cancel")}
+        widgets = {key: MagicMock() for key in ("Preview", "Match", "Force", "-IN2-", "-BROWSE_FOLDER-", "Cancel")}
         instance.__getitem__.side_effect = widgets.__getitem__
         _set_busy(instance, True)
         widgets["Match"].update.assert_any_call(button_color=(PALETTE["muted"], PALETTE["panel_alt"]))
@@ -361,7 +364,7 @@ class V3InterfaceTests(unittest.TestCase):
         from window import _install_button_feedback
 
         instance = MagicMock()
-        keys = ("Match", "Preview", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")
+        keys = ("Match", "Preview", "Force", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")
         widgets = {key: MagicMock() for key in keys}
         instance.__getitem__.side_effect = widgets.__getitem__
         for key, element in widgets.items():
@@ -369,12 +372,33 @@ class V3InterfaceTests(unittest.TestCase):
             element.Widget.bind.return_value = f"handler-{key}"
         _install_button_feedback(instance)
         _install_button_feedback(instance)
-        self.assertEqual(len(instance.gpm_button_bindings), 48)
+        self.assertEqual(len(instance.gpm_button_bindings), 54)
         for element in widgets.values():
             self.assertEqual(element.Widget.unbind.call_count, 6)
 
 
 class AutomaticExifToolUITests(unittest.TestCase):
+    def test_force_appears_only_after_a_normal_run_with_failures(self):
+        import window as ui
+
+        cases = (
+            ("Match", {"restored": 3}, False),
+            ("Match", {"restored": 3, "unmatched": 1}, True),
+            ("Match", {"error": 1, "cancelled": True}, False),
+            ("Preview", {"error": 1, "dry_run": True}, False),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            for event, summary, visible in cases:
+                with self.subTest(event=event, summary=summary):
+                    instance = MagicMock()
+                    widgets = defaultdict(MagicMock)
+                    instance.__getitem__.side_effect = widgets.__getitem__
+                    instance.read.side_effect = [(event, {"-IN2-": folder}), ("-UPDATE_SUMMARY-", {"-UPDATE_SUMMARY-": summary}), ("-UPDATE_DONE-", {"-UPDATE_DONE-": (0, 0)}), (ui.sg.WIN_CLOSED, {})]
+                    with patch("window.build_window", return_value=instance), patch("window._confirm_backup", return_value=True), patch("window.threading.Thread") as worker:
+                        worker.return_value.is_alive.return_value = False
+                        ui.run_app()
+                    self.assertEqual(widgets["Force"].update.call_args_list[-1], call(visible=visible))
+
     def test_preview_and_restore_do_not_require_a_manual_exiftool_path(self):
         import window as ui
 
@@ -446,49 +470,49 @@ class LinkButtonTests(unittest.TestCase):
 
 class PersistentExifToolTests(unittest.TestCase):
     def test_batch_calls_use_the_session_and_close_it(self):
-        from auxFunctions import _run_exiftool, exiftool_batch
+        from exiftool_runner import exiftool_batch, run_exiftool
 
         result = subprocess.CompletedProcess([], 0, b"metadata", b"")
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.ExifToolSession") as session, patch("auxFunctions.subprocess.run") as individual:
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.ExifToolSession") as session, patch("exiftool_runner.subprocess.run") as individual:
             session.return_value.execute.return_value = result
             with exiftool_batch():
-                self.assertIs(_run_exiftool("one.png", ["-j"]), result)
-                self.assertIs(_run_exiftool("two.png", ["-j"]), result)
+                self.assertIs(run_exiftool("one.png", ["-j"]), result)
+                self.assertIs(run_exiftool("two.png", ["-j"]), result)
             self.assertEqual(session.return_value.execute.call_count, 2)
             session.return_value.close.assert_called_once()
             individual.assert_not_called()
 
     def test_failed_status_is_not_treated_as_success(self):
-        from auxFunctions import _run_exiftool, exiftool_batch
+        from exiftool_runner import exiftool_batch, run_exiftool
 
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.ExifToolSession") as session:
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.ExifToolSession") as session:
             session.return_value.execute.return_value = subprocess.CompletedProcess([], 1, b"", b"write failed")
             with self.assertRaisesRegex(RuntimeError, "write failed"):
                 with exiftool_batch():
-                    _run_exiftool("one.png", ["-overwrite_original"])
+                    run_exiftool("one.png", ["-overwrite_original"])
             session.return_value.close.assert_called_once()
 
     def test_multiline_metadata_uses_safe_individual_call(self):
-        from auxFunctions import _run_exiftool, exiftool_batch
+        from exiftool_runner import exiftool_batch, run_exiftool
 
         result = subprocess.CompletedProcess([], 0, b"updated", b"")
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.ExifToolSession") as session, patch("auxFunctions.subprocess.run", return_value=result) as individual:
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.ExifToolSession") as session, patch("exiftool_runner.subprocess.run", return_value=result) as individual:
             with exiftool_batch():
-                _run_exiftool("photo.png", ["-Description=First line\nSecond line"])
+                run_exiftool("photo.png", ["-Description=First line\nSecond line"])
             session.return_value.execute.assert_not_called()
             self.assertIn("-Description=First line\nSecond line", individual.call_args.args[0])
 
     def test_session_is_lazy_for_jpeg_only_batches(self):
-        from auxFunctions import exiftool_batch
+        from exiftool_runner import exiftool_batch
 
-        with patch("auxFunctions.subprocess.Popen") as start:
+        with patch("exiftool_runner.subprocess.Popen") as start:
             with exiftool_batch():
                 pass
             start.assert_not_called()
 
     def test_timeout_forces_session_shutdown(self):
         import queue
-        from auxFunctions import ExifToolSession
+        from exiftool_runner import ExifToolSession
 
         session = ExifToolSession(timeout=0.01)
         session.process = MagicMock()
@@ -500,7 +524,7 @@ class PersistentExifToolTests(unittest.TestCase):
         close.assert_called_once_with(force=True)
 
     def test_unexpected_process_exit_fails_the_operation(self):
-        from auxFunctions import ExifToolSession
+        from exiftool_runner import ExifToolSession
 
         session = ExifToolSession()
         session.process = MagicMock()
@@ -514,35 +538,35 @@ class PersistentExifToolTests(unittest.TestCase):
 
 class MetadataTests(unittest.TestCase):
     def test_missing_exiftool_is_an_error(self):
-        with patch("auxFunctions.get_exiftool_path", return_value=None):
+        with patch("exiftool_runner.get_exiftool_path", return_value=None):
             with self.assertRaises(FileNotFoundError):
                 set_video_metadata("video.mov", 0, 0, 0, 1000000000)
 
     def test_exiftool_failure_is_an_error(self):
         result = SimpleNamespace(returncode=1, stderr=b"write denied", stdout=b"")
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", return_value=result):
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", return_value=result):
             with self.assertRaisesRegex(RuntimeError, "write denied"):
                 set_video_metadata("video.mov", 0, 0, 0, 1000000000)
 
     def test_exiftool_timeout_is_an_error(self):
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", side_effect=subprocess.TimeoutExpired("exiftool", 60)):
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", side_effect=subprocess.TimeoutExpired("exiftool", 60)):
             with self.assertRaisesRegex(RuntimeError, "timed out"):
                 set_video_metadata("video.mov", 0, 0, 0, 1000000000)
 
     def test_video_identifier_is_read_from_keys(self):
         result = SimpleNamespace(returncode=0, stderr=b"", stdout=json.dumps([{"Keys:ContentIdentifier": "live-id"}]).encode())
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", return_value=result):
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", return_value=result):
             self.assertEqual(get_content_identifier("video.mov"), "live-id")
 
     def test_conflicting_identifiers_are_rejected(self):
         result = SimpleNamespace(returncode=0, stderr=b"", stdout=json.dumps([{"Apple:ContentIdentifier": "one", "Keys:ContentIdentifier": "two"}]).encode())
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", return_value=result):
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", return_value=result):
             with self.assertRaisesRegex(ValueError, "Conflicting"):
                 get_content_identifier("video.mov")
 
     def test_exiftool_altitude_reference_is_written_as_a_number(self):
         result = SimpleNamespace(returncode=0, stderr=b"", stdout=b"1 image files updated")
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", return_value=result) as runner:
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", return_value=result) as runner:
             set_image_metadata("photo.png", 41, -3, -12, 1000000000)
             self.assertIn("-EXIF:GPSAltitudeRef#=1", runner.call_args.args[0])
             set_video_metadata("video.mov", 41, -3, -12, 1000000000)
@@ -551,7 +575,7 @@ class MetadataTests(unittest.TestCase):
 
     def test_partial_exiftool_write_is_not_a_success(self):
         result = SimpleNamespace(returncode=0, stderr=b"Warning: Error converting value for Keys:GPSCoordinates", stdout=b"1 image files updated")
-        with patch("auxFunctions.get_exiftool_path", return_value="exiftool"), patch("auxFunctions.subprocess.run", return_value=result):
+        with patch("exiftool_runner.get_exiftool_path", return_value="exiftool"), patch("exiftool_runner.subprocess.run", return_value=result):
             with self.assertRaisesRegex(RuntimeError, "could not write"):
                 set_video_metadata("video.mov", 41, -3, -12, 1000000000)
 
@@ -577,7 +601,7 @@ class MetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / "photo.jpg")
             Path(path).touch()
-            with patch("auxFunctions.setctime", None):
+            with patch("metadata.setctime", None):
                 setWindowsTime(path, 1000000000.25)
             self.assertAlmostEqual(os.path.getmtime(path), 1000000000.25, places=3)
 
@@ -757,18 +781,75 @@ class ProcessingTests(unittest.TestCase):
         for name, expected in (("photo.jpg", b"First"), ("photo(2).jpg", b"Second")):
             self.assertEqual(piexif.load(str(self.root / "MatchedMedia" / name))["0th"][piexif.ImageIFD.ImageDescription], expected)
 
-    def test_existing_different_output_is_never_overwritten(self):
+    def test_existing_output_is_kept_and_new_result_is_numbered(self):
         source = self.photo()
         self.sidecar(description="New")
         output = self.root / "MatchedMedia" / source.name
         output.parent.mkdir()
         output.write_bytes(b"existing result")
         summary = self.run_process()
-        self.assertEqual(summary.get("error"), 1)
+        self.assertEqual(summary.get("restored"), 1)
         self.assertEqual(output.read_bytes(), b"existing result")
-        self.assertTrue(source.is_file())
-        self.assertTrue((self.root / "photo.jpg.json").is_file())
+        self.assertTrue((output.parent / "photo(1).jpg").is_file())
+        self.assertFalse(source.exists())
         self.assertFalse(list(output.parent.glob(".gpm-*")))
+
+    def test_force_renames_media_with_wrong_extension(self):
+        def write(path, *arguments):
+            if path.suffix != ".png":
+                raise RuntimeError("Not a valid JPG (looks more like a PNG)")
+
+        Image.new("RGB", (8, 8), "red").save(self.root / "photo.jpg", format="PNG")
+        self.sidecar()
+        with patch("main._write_metadata_once", side_effect=write), patch("main.run_exiftool"), patch("main.set_image_metadata", side_effect=RuntimeError("wrong type")):
+            self.assertEqual(self.run_process().get("error"), 1)
+            self.assertTrue((self.root / "photo.jpg").is_file())
+            summary = self.run_process(force=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue((self.root / "MatchedMedia" / "ForcedMatches" / "photo.png").is_file())
+        self.assertFalse((self.root / "photo.jpg.json").exists())
+
+    def test_force_uses_unique_file_with_same_name_and_other_extension(self):
+        self.photo()
+        self.sidecar("photo.heic.json", title="photo.heic")
+        self.assertEqual(self.run_process().get("error"), 1)
+        summary = self.run_process(force=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue((self.root / "MatchedMedia" / "ForcedMatches" / "photo.jpg").is_file())
+
+    def test_force_results_are_separated_and_numbered(self):
+        source = self.photo()
+        self.sidecar()
+        output = self.root / "MatchedMedia" / "ForcedMatches" / source.name
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"existing result")
+        summary = self.run_process(force=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertEqual(output.read_bytes(), b"existing result")
+        self.assertTrue((output.parent / "photo(1).jpg").is_file())
+        self.assertFalse((self.root / "MatchedMedia" / "photo.jpg").exists())
+
+    def test_force_recovery_runs_on_a_copy_and_failures_become_unmatched(self):
+        source = self.photo()
+        original = source.read_bytes()
+        self.sidecar()
+        with patch("main._write_metadata_once", side_effect=RuntimeError("broken")), patch("main.run_exiftool"), patch("main.set_image_metadata", side_effect=RuntimeError("still broken")):
+            summary = self.run_process(force=True)
+        self.assertEqual(summary.get("error", 0), 0)
+        self.assertEqual(summary.get("unmatched"), 1)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertTrue((self.root / "photo.jpg.json").is_file())
+        self.assertFalse(list(self.root.glob(".gpm-force-*")))
+        with Path(summary["report"]).open(encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["details"].startswith("Force match failed: "))
+
+    def test_force_discards_invalid_gps_instead_of_failing(self):
+        self.photo()
+        self.sidecar(geoData={"latitude": 200, "longitude": 0})
+        self.assertEqual(self.run_process().get("error"), 1)
+        self.assertEqual(self.run_process(force=True).get("restored"), 1)
 
     def test_repeated_run_does_not_process_moved_media_again(self):
         self.photo()
@@ -791,7 +872,7 @@ class ProcessingTests(unittest.TestCase):
     def test_missing_exiftool_does_not_report_video_success(self):
         (self.root / "video.mov").write_bytes(b"video")
         self.sidecar("video.mov.json", "video.mov")
-        with patch("auxFunctions.get_exiftool_path", return_value=None):
+        with patch("exiftool_runner.get_exiftool_path", return_value=None):
             summary = self.run_process()
         self.assertEqual(summary.get("error"), 1)
         self.assertNotIn("restored", summary)
@@ -900,21 +981,19 @@ class ProcessingTests(unittest.TestCase):
         self.assertTrue((self.root / "MatchedMedia" / "example-edited.png").is_file())
         self.assertFalse((self.root / "example.png.json").exists())
 
-    def test_edited_raw_conflict_keeps_both_sources_and_json(self):
+    def test_edited_raw_conflict_numbers_the_whole_group(self):
         original = self.photo()
-        edited = self.photo("photo-edited.jpg")
+        self.photo("photo-edited.jpg")
         sidecar = self.sidecar()
         target = self.root / "EditedRaw" / original.name
         target.parent.mkdir()
         target.write_bytes(b"previous original")
-        with patch("main._write_metadata") as writer:
-            summary = self.run_process()
-        self.assertEqual(summary.get("error"), 1)
-        writer.assert_not_called()
-        self.assertTrue(original.is_file())
-        self.assertTrue(edited.is_file())
-        self.assertTrue(sidecar.is_file())
+        summary = self.run_process()
+        self.assertEqual(summary.get("restored"), 1)
         self.assertEqual(target.read_bytes(), b"previous original")
+        self.assertTrue((self.root / "EditedRaw" / "photo(1).jpg").is_file())
+        self.assertTrue((self.root / "MatchedMedia" / "photo-edited(1).jpg").is_file())
+        self.assertFalse(sidecar.exists())
 
     def test_malformed_and_non_media_jsons_are_reported(self):
         (self.root / "broken.json").write_text("{", encoding="utf-8")
@@ -1005,18 +1084,16 @@ class ProcessingTests(unittest.TestCase):
         self.assertTrue(second.is_file())
         self.assertFalse((self.root / "MatchedMedia" / "photo.jpg").exists())
 
-    def test_existing_destination_is_checked_before_original_metadata_changes(self):
-        source = self.photo()
-        self.sidecar(description="New description")
-        original = source.read_bytes()
-        output = self.root / "MatchedMedia" / "photo.jpg"
-        output.parent.mkdir()
-        output.write_bytes(b"existing result")
-        with patch("main._write_metadata") as writer:
-            summary = self.run_process()
-        self.assertEqual(summary.get("error"), 1)
-        writer.assert_not_called()
-        self.assertEqual(source.read_bytes(), original)
+    def test_same_names_from_different_folders_share_the_flat_output(self):
+        for year in ("Photos from 2019", "Photos from 2020"):
+            folder = self.root / year
+            folder.mkdir()
+            self.photo().rename(folder / "photo.jpg")
+            self.sidecar(description=year).rename(folder / "photo.jpg.json")
+        summary = self.run_process()
+        self.assertEqual(summary.get("restored"), 2)
+        descriptions = {piexif.load(str(self.root / "MatchedMedia" / name))["0th"][piexif.ImageIFD.ImageDescription] for name in ("photo.jpg", "photo(1).jpg")}
+        self.assertEqual(descriptions, {b"Photos from 2019", b"Photos from 2020"})
 
     def test_json_bom_uppercase_suffix_and_exif_gps_fallback(self):
         self.photo()
@@ -1053,7 +1130,7 @@ class ProcessingTests(unittest.TestCase):
         self.assertTrue(any("Ambiguous match" in row["details"] for row in rows))
         self.assertEqual(summary.get("unmatched"), 2)
 
-    def test_subfolders_are_preserved_and_outputs_are_not_scanned(self):
+    def test_subfolders_are_flattened_and_outputs_are_not_scanned(self):
         folder = self.root / "Photos from 2020"
         folder.mkdir()
         self.photo().rename(folder / "photo.jpg")
@@ -1064,7 +1141,7 @@ class ProcessingTests(unittest.TestCase):
         summary = self.run_process()
         self.assertEqual(summary.get("restored"), 1)
         self.assertNotIn("error", summary)
-        self.assertTrue((self.root / "MatchedMedia" / folder.name / "photo.jpg").is_file())
+        self.assertTrue((self.root / "MatchedMedia" / "photo.jpg").is_file())
 
     def test_png_uses_exiftool_instead_of_piexif(self):
         self.photo("photo.png")

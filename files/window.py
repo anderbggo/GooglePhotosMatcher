@@ -17,13 +17,14 @@ from tkinter import ttk
 import PySimpleGUI as sg
 from PIL import Image
 
-from auxFunctions import _run_exiftool, exiftool_batch, get_exiftool_path, resource_path, set_image_metadata
+from exiftool_runner import exiftool_batch, get_exiftool_path, resource_path, run_exiftool
 from main import mainProcess
+from metadata import set_image_metadata
 from preferences import (
-    LANGUAGE_OPTIONS, LIGHT_PALETTE, PALETTES, THEME_OPTIONS, format_number,
-    load_preferences, localize_message, resolve_preferences, save_preferences,
-    text, validate_preferences,
+    LANGUAGE_OPTIONS, LIGHT_PALETTE, PALETTES, THEME_OPTIONS,
+    load_preferences, resolve_preferences, save_preferences, validate_preferences,
 )
+from translations import format_number, localize_message, text
 
 
 if sys.version_info >= (3, 14):
@@ -37,7 +38,7 @@ if sys.version_info >= (3, 14):
 PALETTE = LIGHT_PALETTE
 FONT = "Segoe UI" if platform.system() == "Windows" else "Helvetica"
 DISPLAY_FONT = "Bahnschrift" if platform.system() == "Windows" else "Avenir Next"
-APP_VERSION = "3.0"
+APP_VERSION = "3.1"
 PROJECT_LINKS = {
     "About": "https://anderbggo.github.io/gpmatcher",
     "Support": "https://anderbggo.github.io/contribute",
@@ -87,7 +88,7 @@ def _choice_labels(language, options):
     return ["English" if option == "en" else "Espa\u00f1ol" if option == "es" else text(language, option) for option in options]
 
 
-def _install_button_feedback(window, keys=("Match", "Preview", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")):
+def _install_button_feedback(window, keys=("Match", "Preview", "Force", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")):
     previous = getattr(window, "gpm_button_bindings", None)
     if isinstance(previous, list):
         for widget, sequence, binding in previous:
@@ -242,7 +243,7 @@ def _set_status(window, key=None, message=None, color="muted", progress=None, fi
 
 def _update_counters(window, summary):
     language = _window_language(window)
-    for key, value in (("-MATCHED-", summary.get("restored", 0) + summary.get("preview", 0)), ("-EXISTING-", summary.get("already_restored", 0)), ("-ERRORS-", summary.get("error", 0)), ("-UNMATCHED-", summary.get("unmatched", 0))):
+    for key, value in (("-MATCHED-", summary.get("restored", 0) + summary.get("already_restored", 0) + summary.get("preview", 0)), ("-ERRORS-", summary.get("error", 0)), ("-UNMATCHED-", summary.get("unmatched", 0))):
         window[key].update(format_number(value, language))
 
 
@@ -259,16 +260,16 @@ def _apply_preferences(window, values, persist=False):
     _style_native_controls(window)
     labels = {
         "-FOLDER_LABEL-": "folder", "-THEME_LABEL-": "theme", "-LANGUAGE_LABEL-": "language",
-        "-ACTIVITY_LABEL-": "activity", "-BROWSE_FOLDER-": "browse", "Match": "match", "Preview": "preview",
+        "-ACTIVITY_LABEL-": "activity", "-BROWSE_FOLDER-": "browse", "Match": "match", "Preview": "preview", "Force": "force",
         "Cancel": "cancel", "Results": "results", "Report": "report", "About": "about", "Support": "support",
-        "-MATCHED-label": "matched", "-EXISTING-label": "existing", "-ERRORS-label": "errors", "-UNMATCHED-label": "unmatched",
+        "-MATCHED-label": "matched", "-ERRORS-label": "errors", "-UNMATCHED-label": "unmatched",
     }
     for key, translation in labels.items():
         window[key].update(text(language, translation))
     for key, options, selected in (("-THEME-", THEME_OPTIONS, values["theme"]), ("-LANGUAGE-", LANGUAGE_OPTIONS, values["language"])):
         labels = _choice_labels(language, options)
         window[key].update(values=labels, value=labels[options.index(selected)])
-    for key, translation in (("About", "about_tip"), ("Support", "support_tip"), ("-THEME-", "theme_tip"), ("-LANGUAGE-", "language_tip")):
+    for key, translation in (("About", "about_tip"), ("Support", "support_tip"), ("Force", "force_tip"), ("-THEME-", "theme_tip"), ("-LANGUAGE-", "language_tip")):
         window[key].set_tooltip(text(language, translation))
     _install_button_feedback(window)
     _update_counters(window, window.gpm_summary)
@@ -327,12 +328,16 @@ def build_window(preferences=None):
     actions = panel([[
         sg.Button(text(language, "match"), key="Match", size=(15, 1), font=(FONT, 11, "bold"), border_width=0, pad=((0, 12), (0, 0))),
         sg.Button(text(language, "preview"), key="Preview", size=(14, 1), border_width=0, button_color=(palette["text"], palette["panel_alt"]), pad=((0, 12), (0, 0))),
+        # The zero-size canvas keeps the hidden button's place in the row.
+        sg.Column([[
+            sg.Button(text(language, "force"), key="Force", size=(14, 1), visible=False, border_width=0, button_color=(palette["text"], palette["panel_alt"]), tooltip=text(language, "force_tip"), pad=((0, 12), (0, 0))),
+            sg.Canvas(size=(0, 0), pad=(0, 0), background_color=palette["panel"]),
+        ]], pad=(0, 0), background_color=palette["panel"]),
         sg.Push(background_color=palette["panel"]),
         sg.Button(text(language, "cancel"), key="Cancel", size=(10, 1), disabled=True, border_width=0, button_color=(palette["muted"], palette["panel"])),
     ]], pad=(28, 12), background_color=palette["panel"])
     counters = panel([[
         counter_column(text(language, "matched"), "-MATCHED-", palette["success"], palette),
-        counter_column(text(language, "existing"), "-EXISTING-", palette["text"], palette),
         counter_column(text(language, "errors"), "-ERRORS-", palette["danger"], palette),
         counter_column(text(language, "unmatched"), "-UNMATCHED-", palette["warning"], palette),
     ]], pad=(28, 16), background_color=palette["input_bg"])
@@ -377,6 +382,8 @@ def _set_busy(window, busy):
         window[key].update(disabled=busy)
     window["Match"].update(button_color=(palette["muted"], palette["panel_alt"]) if busy else (palette["on_accent"], palette["accent"]))
     window["Cancel"].update(disabled=not busy)
+    if busy:
+        window["Force"].update(visible=False)
     _refresh_button_feedback(window)
 
 
@@ -387,18 +394,18 @@ def _open_path(path):
         subprocess.Popen(["open" if platform.system() == "Darwin" else "xdg-open", path])
 
 
-def _build_backup_dialog(window, folder):
+def _build_backup_dialog(window, folder, prefix="backup"):
     palette = _window_palette(window)
     language = _window_language(window)
     layout = [
-        [sg.Text(text(language, "backup_title"), font=(DISPLAY_FONT, 18), text_color=palette["warning"], background_color=palette["panel"], pad=((0, 0), (0, 16)))],
-        [sg.Text(text(language, "backup_message"), size=(64, None), font=(FONT, 11), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 16)))],
+        [sg.Text(text(language, f"{prefix}_title"), font=(DISPLAY_FONT, 18), text_color=palette["warning"], background_color=palette["panel"], pad=((0, 0), (0, 16)))],
+        [sg.Text(text(language, f"{prefix}_message"), size=(64, None), font=(FONT, 11), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 16)))],
         [sg.Text(str(folder), size=(64, 2), font=(FONT, 9), text_color=palette["muted"], background_color=palette["panel"], tooltip=str(folder), pad=((0, 0), (0, 18)))],
         [sg.Push(background_color=palette["panel"]),
          sg.Button(text(language, "cancel"), key="Cancel", size=(12, 1), bind_return_key=True, button_color=(palette["text"], palette["panel_alt"]), pad=((0, 12), (0, 0))),
-         sg.Button(text(language, "backup_continue"), key="Match", size=(23, 1), button_color=(palette["on_accent"], palette["accent"]))],
+         sg.Button(text(language, f"{prefix}_continue"), key="Match", size=(23, 1), button_color=(palette["on_accent"], palette["accent"]))],
     ]
-    dialog = sg.Window(text(language, "backup_title"), layout, modal=True, finalize=True, background_color=palette["panel"], margins=(24, 24), keep_on_top=True)
+    dialog = sg.Window(text(language, f"{prefix}_title"), layout, modal=True, finalize=True, background_color=palette["panel"], margins=(24, 24), keep_on_top=True)
     dialog.gpm_palette = palette
     _install_button_feedback(dialog, ("Match", "Cancel"))
     dialog.bind("<Escape>", "Cancel")
@@ -406,8 +413,8 @@ def _build_backup_dialog(window, folder):
     return dialog
 
 
-def _confirm_backup(window, folder):
-    dialog = _build_backup_dialog(window, folder)
+def _confirm_backup(window, folder, prefix="backup"):
+    dialog = _build_backup_dialog(window, folder, prefix)
     try:
         event, values = dialog.read()
         return event == "Match"
@@ -422,6 +429,7 @@ def run_app():
     closing = False
     summary = {}
     results_folder = ""
+    force_folder = None
     while True:
         event, values = window.read()
         running = worker is not None and worker.is_alive()
@@ -432,15 +440,21 @@ def run_app():
                 _set_status(window, key="finishing")
                 continue
             break
-        if event in ("Match", "Preview"):
+        if event in ("Match", "Preview", "Force"):
             if running:
                 continue
-            folder = Path(values["-IN2-"].strip()).expanduser()
-            if not values["-IN2-"].strip() or not folder.is_dir():
-                _set_status(window, key="invalid_folder", color="danger")
-                continue
-            if event == "Match" and not _confirm_backup(window, folder):
-                continue
+            if event == "Force":
+                if force_folder is None or not _confirm_backup(window, force_folder, "force"):
+                    continue
+                folder = force_folder
+            else:
+                folder = Path(values["-IN2-"].strip()).expanduser()
+                if not values["-IN2-"].strip() or not folder.is_dir():
+                    _set_status(window, key="invalid_folder", color="danger")
+                    continue
+                if event == "Match" and not _confirm_backup(window, folder):
+                    continue
+            force_folder = folder if event == "Match" else None
             cancel_event.clear()
             summary = {}
             window.gpm_summary = summary
@@ -452,11 +466,11 @@ def run_app():
             history = getattr(window, "gpm_log", None)
             if isinstance(history, deque):
                 history.clear()
-            for key in ("-MATCHED-", "-EXISTING-", "-ERRORS-", "-UNMATCHED-"):
+            for key in ("-MATCHED-", "-ERRORS-", "-UNMATCHED-"):
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event}, daemon=True)
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
         elif event in ("-THEME-", "-LANGUAGE-"):
             options = THEME_OPTIONS if event == "-THEME-" else LANGUAGE_OPTIONS
@@ -497,6 +511,8 @@ def run_app():
             _set_status(window, key=label, color="danger" if summary.get("error") else "success")
             window["-PROGRESS_BAR-"].update(100)
             _set_busy(window, False)
+            window["Force"].update(visible=force_folder is not None and not summary.get("cancelled") and bool(summary.get("error") or summary.get("unmatched")))
+            _refresh_button_feedback(window)
             if closing:
                 break
         elif event in ("Results", "Report"):
@@ -526,7 +542,7 @@ def _check_bundled_exiftool(report_path):
                 image_path = str(Path(folder) / f"probe-{index}.png")
                 Image.new("RGB", (8, 8), "red").save(image_path)
                 set_image_metadata(image_path, 41.4, -3.7, -12, 1000000000)
-                result = _run_exiftool(image_path, ["-j", "-n", "-DateTimeOriginal", "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Composite:GPSAltitude"])
+                result = run_exiftool(image_path, ["-j", "-n", "-DateTimeOriginal", "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Composite:GPSAltitude"])
                 metadata = json.loads(result.stdout.decode("utf-8"))[0]
                 expected_date = datetime.fromtimestamp(1000000000).strftime("%Y:%m:%d %H:%M:%S")
                 if metadata.get("DateTimeOriginal") != expected_date or abs(metadata.get("GPSLatitude", 0) - 41.4) > 0.00001 or abs(metadata.get("GPSLongitude", 0) + 3.7) > 0.00001 or metadata.get("GPSAltitude") != -12:

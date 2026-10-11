@@ -70,6 +70,43 @@ def normalized_name(name):
     return unicodedata.normalize("NFC", name).casefold()
 
 
+EQUIVALENT_EXTENSIONS = ({".jpg", ".jpeg"}, {".tif", ".tiff"}, {".heic", ".heif"}, {".mp4", ".m4v", ".mov", ".3gp"})
+HEIF_BRANDS = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"}
+
+
+def detect_media_extension(filepath):
+    """Return the extension matching the file content, or None when unknown."""
+    with open(filepath, "rb") as stream:
+        header = stream.read(64)
+    if header.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return ".webp"
+    if header[:4] in (b"II*\x00", b"MM\x00*"):
+        return ".tif"
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return ".mkv"
+    if header[4:8] == b"ftyp":
+        brands = header[8:min(len(header), max(int.from_bytes(header[:4], "big"), 12))]
+        if b"avif" in brands:
+            return None
+        if header[8:12] in HEIF_BRANDS:
+            return ".heic"
+        if header[8:12] == b"qt  ":
+            return ".mov"
+        if header[8:11] == b"3gp":
+            return ".3gp"
+        return ".mp4"
+    return None
+
+
+def same_media_type(first, second):
+    first, second = first.casefold(), second.casefold()
+    return first == second or any(first in group and second in group for group in EQUIVALENT_EXTENSIONS)
+
+
 def sidecar_media_name(json_name):
     name = json_name[:-5] if json_name.casefold().endswith(".json") else json_name
     duplicate = ""
@@ -487,7 +524,7 @@ def _write_exiftool_tags(filepath, tags, exiftool_path=None, extra_options=()):
         raise RuntimeError(f"ExifTool could not write requested metadata: {warnings}")
 
 
-def set_image_metadata(filepath, lat, lng, altitude, timeStamp, description="", exiftool_path=None):
+def set_image_metadata(filepath, lat, lng, altitude, timeStamp, description="", exiftool_path=None, extra_options=()):
     date = datetime.fromtimestamp(timeStamp).astimezone()
     date_time = date.strftime("%Y:%m:%d %H:%M:%S")
     tags = {
@@ -506,10 +543,10 @@ def set_image_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
             "EXIF:GPSLongitude": abs(lng), "EXIF:GPSLongitudeRef": "W" if lng < 0 else "E",
             "EXIF:GPSAltitude": abs(altitude), "EXIF:GPSAltitudeRef#": 1 if altitude < 0 else 0,
         })
-    _write_exiftool_tags(filepath, tags, exiftool_path)
+    _write_exiftool_tags(filepath, tags, exiftool_path, extra_options)
 
 
-def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", camera_make="", camera_model="", author="", software="", exiftool_path=None):
+def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", camera_make="", camera_model="", author="", software="", exiftool_path=None, extra_options=()):
     """Injects metadata into video files using ExifTool"""
     date = datetime.fromtimestamp(timeStamp).astimezone()
     dateTime = date.strftime("%Y:%m:%d %H:%M:%S")
@@ -546,7 +583,7 @@ def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
         tags["CreatorTool"] = software
         tags["HandlerDescription"] = software
 
-    _write_exiftool_tags(filepath, tags, exiftool_path, ("-api", "QuickTimeUTC=1"))
+    _write_exiftool_tags(filepath, tags, exiftool_path, ("-api", "QuickTimeUTC=1", *extra_options))
 
 def get_content_identifier(filepath, exiftool_path=None):
     """Read an embedded identifier from either half of a Live Photo."""

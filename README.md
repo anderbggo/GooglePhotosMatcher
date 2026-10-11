@@ -1,6 +1,6 @@
-# Google Photos Matcher (v3.0)
+# Google Photos Matcher (v3.1)
 
-**[Download for Windows (v3.0)](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.0/GPMatcher.exe)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.0)
+**[Download for Windows (v3.1)](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.1/GPMatcher.exe)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.1)
 
 Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup required.
 
@@ -20,7 +20,7 @@ Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup re
 
 When you download media from Google Photos via Takeout, the files lose important metadata such as the date taken and GPS coordinates. Google stores this data separately in `.json` sidecar files.
 
-**GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. Successfully restored media are moved into `MatchedMedia`, while original versions of edited photos go into `EditedRaw`. Both folders preserve the export's subfolder structure. JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
+**GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. Successfully restored media are moved into a single flat `MatchedMedia` folder, while original versions of edited photos go into `EditedRaw`; the export's year/album subfolders are not recreated. If two files share a name, the later one gets a number (`photo(1).jpg`). JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
 
 **Make a backup before using Match.** There is no automatic copy or undo: if writing fails partway through, some metadata may already have changed. The app displays a confirmation before every Match run; Preview does not modify or move media.
 
@@ -32,7 +32,7 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 1. Download your _Google Photos_ media from [Google Takeout](https://takeout.google.com/) and extract the downloaded ZIP archives first. GPMatcher processes folders, not ZIP files.
 
-2. [Download GPMatcher for Windows from Release v3.0](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.0/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
+2. [Download GPMatcher for Windows from Release v3.1](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.1/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
 
 3. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
 
@@ -42,9 +42,22 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 5. Restored media appear in `MatchedMedia`; original versions of edited photos are stored in `EditedRaw`. JSON files for successful matches are deleted, not copied into the output. Failed media stay in their original folders with their JSON. Click **Open results** or **Open report** to inspect the output. The CSV report lists only errors, with the JSON, affected media, and cause. Successful matches, previews, skipped sidecars, and unmatched media are omitted from the CSV; the app's counters still show the complete summary. If there are no errors, the CSV contains its column headers only.
 
-Existing output files are never overwritten; conflicts are checked before modifying media. MatchedMedia and EditedRaw must be on the same filesystem as the original export so files can move without copying. ExifTool may still need temporary disk space to rewrite a file's internal metadata. Successfully moved files are excluded from subsequent runs.
+6. If a Match run ends with errors or unmatched files, a **Force match** button appears. See [Force match](#force-match) below.
+
+Existing output files are never overwritten: name clashes get a numbered name, and a Live Photo or an edited/original pair receives the same number so the files still belong together. MatchedMedia and EditedRaw must be on the same filesystem as the original export so files can move without copying. ExifTool may still need temporary disk space to rewrite a file's internal metadata. Successfully moved files are excluded from subsequent runs.
 
 ExifTool is kept open during each processing run so images, videos, and Live Photo checks reuse the same process instead of repeatedly loading its engine. It is closed when the run finishes or fails; operations still have a timeout and errors are checked individually. Metadata containing line breaks uses a separate invocation to preserve its content safely. Large videos can still be limited by disk speed and ExifTool's internal file rewriting.
+
+### Force match
+
+The **Force match** button only appears after a normal Match run that ended with at least one error or unmatched file (not after Preview, a cancelled run, or a previous Force match). Clicking it shows a warning and asks for confirmation. It then retries the remaining files with riskier fixes that may lose some metadata:
+
+- **Wrong extension:** files whose content belongs to another format (for example, a PNG saved as `.jpg`) are renamed to their real extension.
+- **Missing media:** if exactly one unclaimed file has the JSON's name with a different extension (for example, the JSON says `.HEIC` but the file is `.jpg`), that file is used.
+- **Invalid JSON values:** invalid GPS coordinates or descriptions are discarded; the date is still restored.
+- **Damaged metadata:** ExifTool retries while ignoring minor errors, then rebuilds the file's metadata from what can still be read, and as a last resort removes the metadata already embedded in the file (camera, lens, etc.) before writing the Google Photos data. These steps run on a temporary copy; the original is replaced only if a step succeeds. Live Photos only get the first, non-destructive retry so their pairing identifier is kept.
+
+Forced results are saved in `MatchedMedia/ForcedMatches` (and `EditedRaw/ForcedMatches` for originals of edited photos) so you can review them separately. Files that still fail stay in their original folder with their JSON, are counted as unmatched, and appear in the CSV report with a `Force match failed:` reason. MKV files, JSONs without a date, and ambiguous matches cannot be forced.
 
 ### Theme and language
 
@@ -66,7 +79,11 @@ Common edited-photo suffixes are detected automatically, including `editado`, `e
 
 ### Why do some files stay unmatched?
 
-Open the CSV report to see the reason. Recognizable special characters and duplicate-name patterns are handled automatically. If several files are plausible, GPMatcher does not modify them. Missing media, conflicting sidecars, invalid timestamps/GPS, unsupported formats, and ExifTool errors are reported explicitly. Failed writes retain the original location and JSON, but may have partially updated metadata; restore from your backup if needed.
+Open the CSV report to see the reason. Recognizable special characters and duplicate-name patterns are handled automatically. If several files are plausible, GPMatcher does not modify them. Missing media, conflicting sidecars, invalid timestamps/GPS, unsupported formats, and ExifTool errors are reported explicitly. Failed writes retain the original location and JSON, but may have partially updated metadata; restore from your backup if needed. Many of these cases can be retried with [Force match](#force-match).
+
+### Do the photos already contain metadata?
+
+Often, yes. Photos taken with a camera or phone usually keep their original EXIF data (date, camera, and often GPS) inside the file. Screenshots, images saved from messaging apps or social networks, and downloaded pictures often have none. Dates or locations you changed inside Google Photos only exist in the JSON. GPMatcher writes the JSON's date, GPS, and description over the matching fields and keeps the rest of the embedded metadata, except when Force match has to remove it as a last resort.
 
 ### Which formats are supported?
 
@@ -147,6 +164,20 @@ The regression suite uses `unittest`, temporary exports, and real JPEG metadata 
 ```
 python -m unittest discover -s tests -v
 ```
+
+### Code layout
+
+| File | Responsibility |
+| --- | --- |
+| `files/window.py` | GUI entry point (Windows and macOS) |
+| `files/mac.py` | Legacy macOS alias for `window.py` |
+| `files/main.py` | Processing run: scanning, planning, restoring, Force match, CSV report |
+| `files/matching.py` | Pairing JSON sidecars with media files, real file type detection |
+| `files/metadata.py` | Writing dates, GPS and descriptions (piexif/ExifTool), Live Photo identifiers |
+| `files/exiftool_runner.py` | Locating ExifTool and running it through a persistent process |
+| `files/preferences.py` | Theme palettes, system theme/language detection, saved preferences |
+| `files/translations.py` | Interface texts and Spanish log translations |
+| `files/build.py` | Standalone Windows build with bundled ExifTool |
 
 ---
 
