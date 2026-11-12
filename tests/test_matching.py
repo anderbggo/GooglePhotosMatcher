@@ -389,6 +389,69 @@ class V3InterfaceTests(unittest.TestCase):
             self.assertEqual(element.Widget.unbind.call_count, 6)
 
 
+class LogAutoscrollTests(unittest.TestCase):
+    def test_set_autoscroll_toggles_flag_and_places_button(self):
+        from window import _set_autoscroll
+
+        instance = MagicMock()
+        button = MagicMock()
+        instance.gpm_scroll_bottom_button = button
+
+        _set_autoscroll(instance, False)
+        self.assertFalse(instance.gpm_autoscroll)
+        button.place.assert_called_once_with(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
+        button.lift.assert_called_once()
+
+        button.reset_mock()
+        _set_autoscroll(instance, True)
+        self.assertTrue(instance.gpm_autoscroll)
+        button.place_forget.assert_called_once()
+
+    def test_scroll_to_bottom_calls_see_end(self):
+        import tkinter
+        from window import _scroll_to_bottom
+
+        instance = MagicMock()
+        button = MagicMock()
+        instance.gpm_scroll_bottom_button = button
+        log_mock = MagicMock()
+        instance.__getitem__.return_value = log_mock
+
+        _scroll_to_bottom(instance)
+        self.assertTrue(instance.gpm_autoscroll)
+        button.place_forget.assert_called_once()
+        log_mock.Widget.see.assert_called_once_with(tkinter.END)
+
+    def test_append_log_respects_autoscroll_state(self):
+        from collections import deque
+        from preferences import PALETTES
+        from window import _append_log
+
+        instance = MagicMock()
+        instance.gpm_log = deque()
+        instance.gpm_palette = PALETTES["dark"]
+        instance.gpm_language = "en"
+        log_mock = MagicMock()
+        instance.__getitem__.return_value = log_mock
+
+        instance.gpm_autoscroll = False
+        _append_log(instance, "RESTORED: vacation.jpg")
+        self.assertFalse(log_mock.print.call_args.kwargs["autoscroll"])
+
+        instance.gpm_autoscroll = True
+        _append_log(instance, "RESTORED: vacation.jpg")
+        self.assertTrue(log_mock.print.call_args.kwargs["autoscroll"])
+
+    def test_scroll_bottom_event_dispatches_scroll_to_bottom(self):
+        import window as ui
+
+        instance = MagicMock()
+        instance.read.side_effect = [("-SCROLL_BOTTOM-", {}), (ui.sg.WIN_CLOSED, {})]
+        with patch("window.build_window", return_value=instance), patch("window._scroll_to_bottom") as scroll:
+            ui.run_app()
+        scroll.assert_called_once_with(instance)
+
+
 class AutomaticExifToolUITests(unittest.TestCase):
     def test_force_appears_only_after_a_normal_run_with_failures(self):
         import window as ui

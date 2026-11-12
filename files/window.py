@@ -198,13 +198,128 @@ def _style_native_controls(window):
         previous.pack_forget()
         log.vsb = ttk.Scrollbar(previous.master, orient="vertical", command=log.Widget.yview, style="Gpm.Vertical.TScrollbar")
         log.vsb.pack(**layout, before=log.Widget)
-        log.Widget.configure(yscrollcommand=log.vsb.set)
         previous.destroy()
     else:
         log.vsb.configure(style="Gpm.Vertical.TScrollbar")
+    _setup_log_autoscroll(window)
     for option, value in (("background", palette["panel"]), ("foreground", palette["text"]), ("selectBackground", palette["accent"]), ("selectForeground", palette["on_accent"])):
         window.TKroot.option_add(f"*TCombobox*Listbox.{option}", value)
     window["-IN2-"].Widget.configure(relief="flat", highlightthickness=1, highlightbackground=palette["line"], highlightcolor=palette["accent"], insertbackground=palette["text"], background=palette["input_bg"], foreground=palette["text"], disabledbackground=palette["panel_alt"], disabledforeground=palette["muted"], readonlybackground=palette["input_bg"])
+
+
+def _set_autoscroll(window, enabled):
+    window.gpm_autoscroll = bool(enabled)
+    button = getattr(window, "gpm_scroll_bottom_button", None)
+    if button is not None:
+        try:
+            if enabled:
+                button.place_forget()
+            else:
+                button.place(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
+                button.lift()
+        except (tkinter.TclError, AttributeError):
+            pass
+
+
+def _scroll_to_bottom(window):
+    _set_autoscroll(window, True)
+    try:
+        log = window["-LOG-"]
+        log.Widget.see(tkinter.END)
+    except (KeyError, TypeError, AttributeError, tkinter.TclError):
+        pass
+
+
+def _setup_log_autoscroll(window):
+    try:
+        log = window["-LOG-"]
+        if not hasattr(log, "Widget") or not isinstance(log.Widget, tkinter.Text):
+            return
+    except (KeyError, TypeError):
+        return
+
+    if not hasattr(window, "gpm_autoscroll"):
+        window.gpm_autoscroll = True
+
+    palette = _window_palette(window)
+    language = _window_language(window)
+    button = getattr(window, "gpm_scroll_bottom_button", None)
+    if button is None:
+        button = tkinter.Button(
+            log.Widget,
+            text="↓",
+            font=(FONT, 11, "bold"),
+            cursor="hand2",
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=palette["line"],
+            background=palette["panel_alt"],
+            foreground=palette["text"],
+            activebackground=palette["accent"],
+            activeforeground=palette["on_accent"],
+            padx=7,
+            pady=3,
+            command=lambda: _scroll_to_bottom(window),
+        )
+        button.bind("<Enter>", lambda e: button.configure(background=palette["accent"], foreground=palette["on_accent"]))
+        button.bind("<Leave>", lambda e: button.configure(background=palette["panel_alt"], foreground=palette["text"]))
+        try:
+            sg.ToolTip(button, text=text(language, "scroll_bottom"))
+        except Exception:
+            pass
+        window.gpm_scroll_bottom_button = button
+
+        def _check_scroll_position(event=None):
+            try:
+                yv = log.Widget.yview()
+                if yv[1] >= 0.999:
+                    _set_autoscroll(window, True)
+                else:
+                    _set_autoscroll(window, False)
+            except (ValueError, TypeError, tkinter.TclError):
+                pass
+
+        def _on_mousewheel(event):
+            if event.delta > 0:
+                _set_autoscroll(window, False)
+            else:
+                log.Widget.after(30, _check_scroll_position)
+
+        log.Widget.bind("<MouseWheel>", _on_mousewheel, add="+")
+        log.Widget.bind("<Button-4>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Button-5>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<Prior>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Up>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Home>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Next>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<Down>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<End>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+
+        log.vsb.bind("<Button-1>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.vsb.bind("<B1-Motion>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.vsb.bind("<ButtonRelease-1>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+    else:
+        try:
+            button.configure(
+                highlightbackground=palette["line"],
+                background=palette["panel_alt"],
+                foreground=palette["text"],
+                activebackground=palette["accent"],
+                activeforeground=palette["on_accent"],
+            )
+        except (tkinter.TclError, AttributeError):
+            pass
+
+    def _on_log_yscroll(first, last):
+        try:
+            log.vsb.set(first, last)
+            if float(last) >= 0.999 and not getattr(window, "gpm_autoscroll", True):
+                _set_autoscroll(window, True)
+        except (ValueError, TypeError, tkinter.TclError):
+            pass
+
+    log.Widget.configure(yscrollcommand=_on_log_yscroll)
 
 
 def _log_color(message, palette):
@@ -217,10 +332,16 @@ def _log_color(message, palette):
 
 def _append_log(window, message):
     history = getattr(window, "gpm_log", None)
+    autoscroll = getattr(window, "gpm_autoscroll", True)
     if isinstance(history, deque):
         history.append(message)
         palette = _window_palette(window)
-        window["-LOG-"].print(localize_message(message, _window_language(window)), text_color=_log_color(message, palette), background_color=palette["input_bg"])
+        window["-LOG-"].print(
+            localize_message(message, _window_language(window)),
+            text_color=_log_color(message, palette),
+            background_color=palette["input_bg"],
+            autoscroll=autoscroll,
+        )
     else:
         window["-LOG-"].print(localize_message(message, _window_language(window)))
 
@@ -287,8 +408,9 @@ def _apply_preferences(window, values, persist=False):
     _set_status(window, **status)
     window["-LOG-"].update("")
     palette = _window_palette(window)
+    autoscroll = getattr(window, "gpm_autoscroll", True)
     for message in window.gpm_log:
-        window["-LOG-"].print(localize_message(message, language), text_color=_log_color(message, palette), background_color=palette["input_bg"])
+        window["-LOG-"].print(localize_message(message, language), text_color=_log_color(message, palette), background_color=palette["input_bg"], autoscroll=autoscroll)
     if persist:
         try:
             save_preferences(values)
@@ -487,6 +609,7 @@ def run_app():
             window["Report"].update(disabled=True)
             window["Results"].update(disabled=True)
             window["-LOG-"].update("")
+            _set_autoscroll(window, True)
             history = getattr(window, "gpm_log", None)
             if isinstance(history, deque):
                 history.clear()
@@ -568,6 +691,8 @@ def run_app():
                     _append_log(window, text("en", "browser_failed", detail=PROJECT_LINKS[event]))
             except (OSError, webbrowser.Error) as error:
                 _append_log(window, text("en", "browser_failed", detail=error))
+        elif event == "-SCROLL_BOTTOM-":
+            _scroll_to_bottom(window)
     window.close()
 
 
