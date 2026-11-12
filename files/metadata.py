@@ -19,38 +19,87 @@ else:
 
 
 def parse_filename_timestamp(filename):
-    """Extract a Unix timestamp from standard camera and smartphone filename patterns."""
+    """Extract a Unix timestamp from standard camera, smartphone, and messaging app filename patterns."""
     if not filename:
         return None
     patterns = [
+        # Camera / Pixel / Samsung / Snapchat / Screenshots
         r"(?:IMG|PXL|VID|SAM|WP|AUD|Screenshot|ScreenShot|Snapchat)[_-](\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})",
-        r"(\d{4})[-_](\d{2})[-_](\d{2})[ _-](\d{2})[.:_-](\d{2})[.:_-](\d{2})",
+        # Signal / Telegram / Messaging / Generic
+        r"(?:signal|photo|video|Telegram|Screen_Recording)?[_-]?(\d{4})[-_](\d{2})[-_](\d{2})[ _-](\d{2})[.:_-](\d{2})[.:_-](\d{2})",
         r"(?<!\d)(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?!\d)",
+        # WordPress / Samsung alternate
+        r"wp-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})",
     ]
     for pattern in patterns:
         match = re.search(pattern, filename, re.IGNORECASE)
         if match:
-            y, m, d, h, mn, s = map(int, match.groups())
-            if 1970 <= y <= 2040 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= h <= 23 and 0 <= mn <= 59 and 0 <= s <= 59:
-                try:
-                    dt = datetime(y, m, d, h, mn, s).astimezone()
-                    return int(dt.timestamp())
-                except (ValueError, OverflowError):
-                    continue
+            groups = [g for g in match.groups() if g is not None]
+            if len(groups) >= 6:
+                y, m, d, h, mn, s = map(int, groups[-6:])
+                if 1970 <= y <= 2040 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= h <= 23 and 0 <= mn <= 59 and 0 <= s <= 59:
+                    try:
+                        dt = datetime(y, m, d, h, mn, s).astimezone()
+                        return int(dt.timestamp())
+                    except (ValueError, OverflowError):
+                        continue
     date_patterns = [
-        r"(?:IMG|PXL|VID)[_-](\d{4})(\d{2})(\d{2})",
+        # WhatsApp: IMG-20201015-WA0004.jpg, VID-20201015-WA0002.mp4
+        r"(?:IMG|VID)[_-](\d{4})(\d{2})(\d{2})[_-]WA\d+",
+        # Standard date-only prefixes
+        r"(?:IMG|PXL|VID|SAM|WA)[_-](\d{4})(\d{2})(\d{2})",
         r"(?<!\d)(\d{4})[-_](\d{2})[-_](\d{2})(?!\d)",
     ]
     for pattern in date_patterns:
         match = re.search(pattern, filename, re.IGNORECASE)
         if match:
-            y, m, d = map(int, match.groups())
+            y, m, d = map(int, match.groups()[:3])
             if 1970 <= y <= 2040 and 1 <= m <= 12 and 1 <= d <= 31:
                 try:
                     dt = datetime(y, m, d, 12, 0, 0).astimezone()
                     return int(dt.timestamp())
                 except (ValueError, OverflowError):
                     continue
+    return None
+
+
+def get_container_datetime(filepath, exiftool_path=None):
+    """Read embedded creation or modification date from image/video header as last resort."""
+    if not os.path.isfile(filepath):
+        return None
+    try:
+        ext = os.path.splitext(filepath)[1].casefold()
+        if ext in {".jpg", ".jpeg"}:
+            try:
+                exif_dict = piexif.load(filepath)
+                for ifd in ("Exif", "0th"):
+                    for tag in (piexif.ExifIFD.DateTimeOriginal, piexif.ImageIFD.DateTime):
+                        raw_date = exif_dict.get(ifd, {}).get(tag)
+                        if raw_date and isinstance(raw_date, bytes):
+                            text_date = raw_date.decode("latin1", errors="ignore").strip()
+                            dt = datetime.strptime(text_date, "%Y:%m:%d %H:%M:%S").astimezone()
+                            ts = int(dt.timestamp())
+                            if ts > 0:
+                                return ts
+            except Exception:
+                pass
+        if exiftool_runner.get_exiftool_path(exiftool_path):
+            result = exiftool_runner.run_exiftool(filepath, ["-j", "-DateTimeOriginal", "-CreateDate", "-CreationDate"], exiftool_path)
+            items = json.loads(result.stdout.decode("utf-8"))
+            if items and isinstance(items, list):
+                for key in ("DateTimeOriginal", "CreateDate", "CreationDate"):
+                    val = items[0].get(key)
+                    if isinstance(val, str) and len(val) >= 19:
+                        try:
+                            clean_str = val[:19]
+                            dt = datetime.strptime(clean_str, "%Y:%m:%d %H:%M:%S").astimezone()
+                            ts = int(dt.timestamp())
+                            if ts > 0:
+                                return ts
+                        except Exception:
+                            continue
+    except Exception:
+        pass
     return None
 
 
@@ -158,7 +207,7 @@ def set_image_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
             "EXIF:GPSLongitude": abs(lng), "EXIF:GPSLongitudeRef": "W" if lng < 0 else "E",
             "EXIF:GPSAltitude": abs(altitude), "EXIF:GPSAltitudeRef#": 1 if altitude < 0 else 0,
         })
-    exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, extra_options)
+    exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, ("-api", "LargeFileSupport=1", *extra_options))
 
 
 def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", camera_make="", camera_model="", author="", software="", exiftool_path=None, extra_options=()):
@@ -196,13 +245,13 @@ def set_video_metadata(filepath, lat, lng, altitude, timeStamp, description="", 
         tags["CreatorTool"] = software
         tags["HandlerDescription"] = software
 
-    exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, ("-api", "QuickTimeUTC=1", *extra_options))
+    exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, ("-api", "QuickTimeUTC=1", "-api", "LargeFileSupport=1", *extra_options))
 
 
 def get_content_identifier(filepath, exiftool_path=None):
     """Read an embedded identifier from either half of a Live Photo."""
     if exiftool_runner.get_exiftool_path(exiftool_path):
-        result = exiftool_runner.run_exiftool(filepath, ["-j", "-G1", "-Apple:ContentIdentifier", "-Keys:ContentIdentifier"], exiftool_path)
+        result = exiftool_runner.run_exiftool(filepath, ["-j", "-G1", "-Apple:ContentIdentifier", "-Keys:ContentIdentifier", "-XMP:ContentIdentifier"], exiftool_path)
         metadata = json.loads(result.stdout.decode("utf-8"))
         identifiers = {
             value.strip() for key, value in metadata[0].items()
@@ -221,9 +270,20 @@ def get_content_identifier(filepath, exiftool_path=None):
 
 
 def set_content_identifier(filepath, identifier, exiftool_path=None):
-    """Sets a copied Apple Live Photo identifier on a video file."""
+    """Sets an Apple Live Photo identifier on a video or image file."""
     if not isinstance(identifier, str) or not identifier.strip() or any(character in identifier for character in "\r\n\0"):
         raise ValueError("Invalid Live Photo identifier")
-    exiftool_runner.write_exiftool_tags(filepath, {"Keys:ContentIdentifier": identifier.strip()}, exiftool_path)
-    if get_content_identifier(filepath, exiftool_path) != identifier.strip():
+    identifier = identifier.strip()
+    ext = os.path.splitext(filepath)[1].casefold()
+    if ext in {".mov", ".mp4"}:
+        tags = {"Keys:ContentIdentifier": identifier}
+        exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, extra_options=("-m", "-api", "LargeFileSupport=1"))
+    else:
+        try:
+            tags = {"Apple:ContentIdentifier": identifier, "XMP:ContentIdentifier": identifier}
+            exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, extra_options=("-m", "-api", "LargeFileSupport=1"))
+        except Exception:
+            tags = {"XMP:ContentIdentifier": identifier}
+            exiftool_runner.write_exiftool_tags(filepath, tags, exiftool_path, extra_options=("-m", "-api", "LargeFileSupport=1"))
+    if get_content_identifier(filepath, exiftool_path) != identifier:
         raise RuntimeError("ExifTool did not preserve the requested Live Photo identifier")

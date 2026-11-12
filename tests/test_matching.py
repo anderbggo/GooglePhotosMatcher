@@ -1312,6 +1312,59 @@ class ProcessingTests(unittest.TestCase):
         gif_path.write_bytes(gif_header)
         self.assertEqual(detect_media_extension(gif_path), ".gif")
 
+    def test_creation_time_fallback_when_photo_taken_time_is_epoch_zero(self):
+        source = self.photo("vacation.jpg")
+        (self.root / "vacation.jpg.json").write_text(json.dumps({
+            "title": "vacation.jpg",
+            "photoTakenTime": {"timestamp": "0"},
+            "creationTime": {"timestamp": "1620000000"}
+        }), encoding="utf-8")
+        summary = self.run_process()
+        self.assertEqual(summary.get("restored"), 1)
+        output = self.root / "MatchedMedia" / source.name
+        self.assertEqual(int(output.stat().st_mtime), 1620000000)
+
+    def test_parse_filename_timestamp_messaging_patterns(self):
+        from metadata import parse_filename_timestamp
+        # WhatsApp image & video
+        ts_wa = parse_filename_timestamp("IMG-20201015-WA0004.jpg")
+        self.assertIsNotNone(ts_wa)
+        dt_wa = datetime.fromtimestamp(ts_wa).astimezone()
+        self.assertEqual((dt_wa.year, dt_wa.month, dt_wa.day), (2020, 10, 15))
+
+        ts_wa_vid = parse_filename_timestamp("VID-20210325-WA0012.mp4")
+        self.assertIsNotNone(ts_wa_vid)
+        dt_wa_vid = datetime.fromtimestamp(ts_wa_vid).astimezone()
+        self.assertEqual((dt_wa_vid.year, dt_wa_vid.month, dt_wa_vid.day), (2021, 3, 25))
+
+        # Signal pattern
+        ts_signal = parse_filename_timestamp("signal-2021-08-15-14-30-22.jpg")
+        self.assertIsNotNone(ts_signal)
+        dt_sig = datetime.fromtimestamp(ts_signal).astimezone()
+        self.assertEqual((dt_sig.year, dt_sig.month, dt_sig.day, dt_sig.hour, dt_sig.minute, dt_sig.second), (2021, 8, 15, 14, 30, 22))
+
+        # Telegram pattern
+        ts_tg = parse_filename_timestamp("photo_2022-01-05_09-15-30.jpg")
+        self.assertIsNotNone(ts_tg)
+        dt_tg = datetime.fromtimestamp(ts_tg).astimezone()
+        self.assertEqual((dt_tg.year, dt_tg.month, dt_tg.day, dt_tg.hour, dt_tg.minute, dt_tg.second), (2022, 1, 5, 9, 15, 30))
+
+    def test_container_datetime_fallback_when_sidecar_has_no_time_and_no_filename_regex(self):
+        source = self.photo("family.jpg")
+        exif_dict = {"0th": {}, "Exif": {piexif.ExifIFD.DateTimeOriginal: b"2021:05:10 11:22:33"}, "GPS": {}, "1st": {}, "thumbnail": None}
+        piexif.insert(piexif.dump(exif_dict), str(source))
+        (self.root / "family.jpg.json").write_text(json.dumps({
+            "title": "family.jpg",
+            "photoTakenTime": {}
+        }), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        expected_ts = int(datetime.strptime("2021:05:10 11:22:33", "%Y:%m:%d %H:%M:%S").astimezone().timestamp())
+        output = self.root / "MatchedMedia" / source.name
+        self.assertEqual(int(output.stat().st_mtime), expected_ts)
+
 
 if __name__ == "__main__":
     unittest.main()

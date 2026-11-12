@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -22,6 +23,7 @@ from matching import (
     sidecar_media_name,
 )
 from metadata import (
+    get_container_datetime,
     get_content_identifier,
     parse_filename_timestamp,
     set_content_identifier,
@@ -36,7 +38,7 @@ FORCED_FOLDER = "ForcedMatches"
 # Riskier recoveries tried in order on a temporary copy during force match.
 FORCE_STEPS = (
     ("ignored minor metadata errors", ()),
-    ("rebuilt damaged metadata", ("-all=", "-tagsfromfile", "@", "-all:all", "-unsafe", "-icc_profile")),
+    ("rebuilt damaged metadata", ("-ThumbnailImage=", "-all=", "-tagsfromfile", "@", "-all:all", "-unsafe", "-icc_profile")),
     ("removed existing embedded metadata", ("-all=",)),
 )
 
@@ -49,15 +51,20 @@ def log(window, msg):
 def _metadata(data, lenient=False, synthesized_timestamp=None):
     timestamp = synthesized_timestamp
     if timestamp is None:
-        for key in ("photoTakenTime", "photoLastModifiedTime"):
+        for key in ("photoTakenTime", "creationTime", "photoLastModifiedTime"):
             value = data.get(key)
             if isinstance(value, dict) and value.get("timestamp") is not None:
                 raw_timestamp = value["timestamp"]
                 if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, (str, int)):
                     raise ValueError("Invalid photo timestamp")
-                timestamp = int(raw_timestamp)
-                datetime.fromtimestamp(timestamp)
-                break
+                cand = int(raw_timestamp)
+                if cand > 0:
+                    try:
+                        datetime.fromtimestamp(cand)
+                        timestamp = cand
+                        break
+                    except (ValueError, OverflowError):
+                        pass
     if timestamp is None:
         raise ValueError("Missing photo timestamp")
     coordinates = (0.0, 0.0, 0.0)
@@ -93,6 +100,8 @@ def _scan_error(error):
 def _plan(root, edited_word, window, cancel_event, force=False, self_heal=False):
     tasks = []
     matchers = {}
+    scan_count = 0
+    last_scan_update = 0.0
     for directory, subdirectories, filenames in os.walk(root, onerror=_scan_error, followlinks=False):
         folder = Path(directory)
         subdirectories[:] = sorted(name for name in subdirectories if name not in {"MatchedMedia", "EditedRaw"} and not (folder / name).is_symlink())
@@ -109,14 +118,18 @@ def _plan(root, edited_word, window, cancel_event, force=False, self_heal=False)
             json_path = folder / json_name
             task = {"json": str(json_path.relative_to(root)), "media": "", "status": "pending", "rule": "", "details": "", "json_path": json_path, "json_paths": [json_path], "source": None, "raw": None, "companion": None}
             tasks.append(task)
-            window.write_event_value("-UPDATE_PROGRESS-", (0, f"Scanning: {json_path.name}"))
+            scan_count += 1
+            now = time.monotonic()
+            if scan_count % 50 == 0 or (now - last_scan_update) >= 0.1:
+                last_scan_update = now
+                window.write_event_value("-UPDATE_PROGRESS-", (0, f"Scanning: {json_path.name}"))
             try:
                 with json_path.open(encoding="utf-8-sig") as stream:
                     data = json.load(stream)
                 if not isinstance(data, dict):
                     raise ValueError("JSON metadata must be an object")
                 title = data.get("title")
-                if not title or not any(key in data for key in ("photoTakenTime", "photoLastModifiedTime")):
+                if not title or not any(key in data for key in ("photoTakenTime", "creationTime", "photoLastModifiedTime")):
                     task.update(status="skipped", details="Not a photo/video metadata sidecar")
                     continue
                 if not isinstance(title, str):
@@ -126,10 +139,21 @@ def _plan(root, edited_word, window, cancel_event, force=False, self_heal=False)
                     task["metadata"] = _metadata(data)
                 except (ValueError, TypeError, OverflowError) as error:
                     synthesized = parse_filename_timestamp(title) or parse_filename_timestamp(json_name) if self_heal else None
+                    if synthesized is None and self_heal:
+                        try:
+                            cand_edited, cand_original = matcher.match(title, json_name, edited_word)
+                            cand_file = cand_edited or cand_original
+                            if cand_file and (folder / cand_file).is_file():
+                                synthesized = get_container_datetime(str(folder / cand_file))
+                                if synthesized is not None:
+                                    task["details"] = "Self-healed: recovered timestamp from media header"
+                        except Exception:
+                            pass
                     if synthesized is not None:
                         try:
                             task["metadata"] = _metadata(data, lenient=True, synthesized_timestamp=synthesized)
-                            task["details"] = "Self-healed: restored timestamp from filename"
+                            if not task["details"]:
+                                task["details"] = "Self-healed: restored timestamp from filename"
                         except Exception:
                             if not force:
                                 raise
@@ -413,7 +437,7 @@ def _force_write(path, metadata, exiftool_path, preserve_identifier, first_error
             shutil.copy2(path, temporary)
             if cleanup:
                 run_exiftool(str(temporary), ["-overwrite_original", "-m", *cleanup], exiftool_path)
-            writer(str(temporary), metadata["latitude"], metadata["longitude"], metadata["altitude"], metadata["timestamp"], metadata["description"], exiftool_path=exiftool_path, extra_options=("-m",))
+            writer(str(temporary), metadata["latitude"], metadata["longitude"], metadata["altitude"], metadata["timestamp"], metadata["description"], exiftool_path=exiftool_path, extra_options=("-m", "-api", "LargeFileSupport=1"))
             os.replace(temporary, path)
             warning = setWindowsTime(str(path), metadata["timestamp"])
             prefix = "Self-healed" if self_heal else "Force match"
