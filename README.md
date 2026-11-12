@@ -1,16 +1,16 @@
-# Google Photos Matcher (v3.1)
+# Google Photos Matcher (v3.2)
 
-**[Download for Windows (v3.1)](https://anderbggo.github.io/gpmatcher/)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.1)
+**[Download for Windows (v3.2)](https://anderbggo.github.io/gpmatcher/)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.2)
 
 Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup required.
 
 > Simple tool to restore metadata (date, GPS coordinates, etc.) from Google Photos JSON files back into your original images and videos — just like [MetadataFixer](https://metadatafixer.com/pricing), but **free and open source**!
 >
-> <img width="900" height="680" alt="Google Photos Matcher v3.1 light interface" src="assets/interface-v3.png?v=3.1" />
+> <img width="900" height="680" alt="Google Photos Matcher v3.2 light interface" src="assets/interface-v3.png?v=3.2" />
 
 <details>
 <summary>Dark mode and Spanish interface</summary>
-<img width="900" height="680" alt="Google Photos Matcher v3.1 dark interface in Spanish" src="assets/interface-v3-dark.png?v=3.1" />
+<img width="900" height="680" alt="Google Photos Matcher v3.2 dark interface in Spanish" src="assets/interface-v3-dark.png?v=3.2" />
 </details>
 
 
@@ -20,7 +20,16 @@ Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup re
 
 When you download media from Google Photos via Takeout, the files lose important metadata such as the date taken and GPS coordinates. Google stores this data separately in `.json` sidecar files.
 
-**GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. Successfully restored media are moved into a single flat `MatchedMedia` folder, while original versions of edited photos go into `EditedRaw`; the export's year/album subfolders are not recreated. If two files share a name, the later one gets a number (`photo(1).jpg`). JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
+**GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. By default, successfully restored media are moved into a single flat `MatchedMedia` folder, while original versions of edited photos go into `EditedRaw`. Alternatively, enabling **in-place mode** preserves your entire folder structure: media files remain in their original year and album folders, metadata is merged directly into them, and no output folders are created. If two files share a name, the later one gets a number (`photo(1).jpg`). JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
+
+**Self-healing metadata** automatically repairs corrupted or incomplete sidecars:
+- **Corrupted EXIF repair:** Automatically rebuilds damaged EXIF blocks using ExifTool cleanup pipelines without requiring manual Force match.
+- **Filename timestamp synthesis:** If Google Takeout loses or corrupts the timestamp inside the JSON sidecar, the capture date is extracted directly from camera and smartphone filename patterns (`IMG_YYYYMMDD_HHMMSS`, `PXL_...`, `VID_...`, etc.).
+- **GPS sanitization:** Discards out-of-range or malformed coordinates while preserving valid capture dates and descriptions.
+- **Apple Live Photo pairing:** Generates or synchronizes Apple Content Identifiers between photos and companion videos when missing.
+
+**Multi-part Takeout & Cross-folder Matching:**
+When large Takeout archives are split into multiple parts (e.g., `Part 01`, `Part 02`), media files in one folder can be matched with JSON sidecars split into sibling folders. Album and year folder partitions are also resolved seamlessly. Dynamic truncation handling accurately matches long titles truncated across character boundaries.
 
 **Make a backup before using Match or Force match.** There is no automatic copy or undo: if writing fails partway through, some metadata may already have changed. Force match may remove existing camera or lens metadata as a last resort. The app displays a confirmation before every Match or Force match run; Preview does not modify or move media.
 
@@ -32,7 +41,7 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 1. Download your _Google Photos_ media from [Google Takeout](https://takeout.google.com/) and extract the downloaded ZIP archives first. GPMatcher processes folders, not ZIP files.
 
-2. [Download GPMatcher for Windows from Release v3.1](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.1/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
+2. [Download GPMatcher for Windows from Release v3.2](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.2/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
 
 3. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
 
@@ -40,7 +49,7 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 4. Click **Preview** to inspect the matching plan without writing media, or **Match** to process it. Before Match starts, the app recommends a backup and asks for explicit confirmation. **Cancel** stops after the current file is completed.
 
-5. Restored media appear in `MatchedMedia`; original versions of edited photos are stored in `EditedRaw`. JSON files for successful matches are deleted, not copied into the output. Failed media stay in their original folders with their JSON. Click **Open results** or **Open report** to inspect the output. The CSV report lists errors and failed Force match attempts, with the JSON, affected media, and cause. Failed Force match attempts count as unmatched but are included in the CSV. Successful matches, previews, skipped sidecars, and other unmatched media are omitted; the Matched, Errors and Unmatched counters still show the complete summary. If there are no reportable failures, the CSV contains its column headers only.
+5. Restored media appear in `MatchedMedia` (or remain in their original subfolders when in-place mode is enabled); original versions of edited photos are stored in `EditedRaw`. JSON files for successful matches are deleted, not copied into the output. Failed media stay in their original folders with their JSON. Click **Open results** or **Open report** to inspect the output. The CSV report lists errors and failed Force match attempts, with the JSON, affected media, and cause. Failed Force match attempts count as unmatched but are included in the CSV. Successful matches, previews, skipped sidecars, and other unmatched media are omitted; the Matched, Errors and Unmatched counters still show the complete summary. If there are no reportable failures, the CSV contains its column headers only.
 
 6. If a Match run ends with errors or unmatched files, a **Force match** button appears. See [Force match](#force-match) below.
 
@@ -90,8 +99,8 @@ Often, yes. Photos taken with a camera or phone usually keep their original EXIF
 ExifTool is included in the standalone Windows build. It is still required separately when running the Python source or using an older, unbundled executable.
 
 - JPEG/JPG: restored with piexif, with ExifTool as a fallback for problematic EXIF. Apple MakerNotes use ExifTool to preserve Live Photo metadata.
-- HEIC/HEIF, PNG, WebP, TIFF/TIF: require ExifTool.
-- MP4, MOV, 3GP, M4V: require ExifTool.
+- HEIC/HEIF, PNG, WebP, TIFF/TIF, DNG, GIF, BMP, and RAW formats (CR2, NEF, ARW): require ExifTool.
+- MP4, MOV, 3GP, M4V, AVI, WMV: require ExifTool.
 - MKV: detected and reported, but not restored because ExifTool cannot write its metadata.
 
 Capture timestamps are interpreted in the computer's local timezone. EXIF timezone offsets and QuickTime UTC conversion are updated consistently; Takeout does not always provide the original capture timezone.

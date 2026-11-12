@@ -389,6 +389,69 @@ class V3InterfaceTests(unittest.TestCase):
             self.assertEqual(element.Widget.unbind.call_count, 6)
 
 
+class LogAutoscrollTests(unittest.TestCase):
+    def test_set_autoscroll_toggles_flag_and_places_button(self):
+        from window import _set_autoscroll
+
+        instance = MagicMock()
+        button = MagicMock()
+        instance.gpm_scroll_bottom_button = button
+
+        _set_autoscroll(instance, False)
+        self.assertFalse(instance.gpm_autoscroll)
+        button.place.assert_called_once_with(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
+        button.lift.assert_called_once()
+
+        button.reset_mock()
+        _set_autoscroll(instance, True)
+        self.assertTrue(instance.gpm_autoscroll)
+        button.place_forget.assert_called_once()
+
+    def test_scroll_to_bottom_calls_see_end(self):
+        import tkinter
+        from window import _scroll_to_bottom
+
+        instance = MagicMock()
+        button = MagicMock()
+        instance.gpm_scroll_bottom_button = button
+        log_mock = MagicMock()
+        instance.__getitem__.return_value = log_mock
+
+        _scroll_to_bottom(instance)
+        self.assertTrue(instance.gpm_autoscroll)
+        button.place_forget.assert_called_once()
+        log_mock.Widget.see.assert_called_once_with(tkinter.END)
+
+    def test_append_log_respects_autoscroll_state(self):
+        from collections import deque
+        from preferences import PALETTES
+        from window import _append_log
+
+        instance = MagicMock()
+        instance.gpm_log = deque()
+        instance.gpm_palette = PALETTES["dark"]
+        instance.gpm_language = "en"
+        log_mock = MagicMock()
+        instance.__getitem__.return_value = log_mock
+
+        instance.gpm_autoscroll = False
+        _append_log(instance, "RESTORED: vacation.jpg")
+        self.assertFalse(log_mock.print.call_args.kwargs["autoscroll"])
+
+        instance.gpm_autoscroll = True
+        _append_log(instance, "RESTORED: vacation.jpg")
+        self.assertTrue(log_mock.print.call_args.kwargs["autoscroll"])
+
+    def test_scroll_bottom_event_dispatches_scroll_to_bottom(self):
+        import window as ui
+
+        instance = MagicMock()
+        instance.read.side_effect = [("-SCROLL_BOTTOM-", {}), (ui.sg.WIN_CLOSED, {})]
+        with patch("window.build_window", return_value=instance), patch("window._scroll_to_bottom") as scroll:
+            ui.run_app()
+        scroll.assert_called_once_with(instance)
+
+
 class AutomaticExifToolUITests(unittest.TestCase):
     def test_force_appears_only_after_a_normal_run_with_failures(self):
         import window as ui
@@ -1181,6 +1244,515 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(summary.get("error"), 1)
         self.assertFalse((self.root / "MatchedMedia" / "photo.jpg").exists())
         self.assertTrue((self.root / "photo.jpg.json").is_file())
+
+    def test_in_place_restoration_preserves_subfolders_and_deletes_sidecars(self):
+        folder = self.root / "Photos from 2020"
+        folder.mkdir()
+        photo_path = folder / "photo.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo_path)
+        sidecar_path = folder / "photo.jpg.json"
+        sidecar_path.write_text(json.dumps({"title": "photo.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo_path.is_file())
+        self.assertFalse(sidecar_path.exists())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+        self.assertFalse((self.root / "EditedRaw").exists())
+        self.assertTrue(Path(summary["report"]).is_file())
+        self.assertEqual(Path(summary["report"]).parent, self.root)
+
+    def test_in_place_multipart_subdirectories_restore_in_place(self):
+        folder1 = self.root / "Takeout Part 01" / "Google Photos" / "Photos from 2020"
+        folder2 = self.root / "Takeout Part 02" / "Google Photos" / "Photos from 2021"
+        folder1.mkdir(parents=True)
+        folder2.mkdir(parents=True)
+
+        photo1 = folder1 / "photo1.jpg"
+        photo2 = folder2 / "photo2.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo1)
+        Image.new("RGB", (16, 16), "yellow").save(photo2)
+
+        (folder1 / "photo1.jpg.json").write_text(json.dumps({"title": "photo1.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        (folder2 / "photo2.jpg.json").write_text(json.dumps({"title": "photo2.jpg", "photoTakenTime": {"timestamp": "1000000001"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 2)
+        self.assertTrue(photo1.is_file())
+        self.assertTrue(photo2.is_file())
+        self.assertFalse((folder1 / "photo1.jpg.json").exists())
+        self.assertFalse((folder2 / "photo2.jpg.json").exists())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+
+    def test_in_place_edited_and_raw_remain_in_place(self):
+        folder = self.root / "Photos from 2020"
+        folder.mkdir()
+        edited = folder / "photo-edited.jpg"
+        raw = folder / "photo.jpg"
+        Image.new("RGB", (16, 16), "red").save(edited)
+        Image.new("RGB", (16, 16), "red").save(raw)
+        (folder / "photo.jpg.json").write_text(json.dumps({"title": "photo.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(edited.is_file())
+        self.assertTrue(raw.is_file())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+        self.assertFalse((self.root / "EditedRaw").exists())
+        self.assertFalse((folder / "photo.jpg.json").exists())
+
+    def test_cross_part_archive_split_matches_sibling_folders(self):
+        folder1 = self.root / "Takeout Part 01" / "Photos from 2020"
+        folder2 = self.root / "Takeout Part 02" / "Photos from 2020"
+        folder1.mkdir(parents=True)
+        folder2.mkdir(parents=True)
+        photo = folder1 / "vacation.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo)
+        (folder2 / "vacation.jpg.json").write_text(json.dumps({"title": "vacation.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo.is_file())
+        self.assertFalse((folder2 / "vacation.jpg.json").exists())
+
+    def test_cross_folder_album_vs_year_matches_unambiguous_stem(self):
+        album = self.root / "Trip to Paris"
+        year = self.root / "Photos from 2021"
+        album.mkdir(parents=True)
+        year.mkdir(parents=True)
+        photo = year / "eiffel.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo)
+        (album / "eiffel.jpg.json").write_text(json.dumps({"title": "eiffel.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo.is_file())
+        self.assertFalse((album / "eiffel.jpg.json").exists())
+
+    def test_self_heal_reconstructs_timestamp_from_filename(self):
+        self.photo("IMG_20210815_143000.jpg")
+        (self.root / "IMG_20210815_143000.jpg.json").write_text(json.dumps({"title": "IMG_20210815_143000.jpg", "photoTakenTime": {}}), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+
+    def test_self_heal_sanitizes_invalid_gps_coordinates(self):
+        self.photo("beach.jpg")
+        (self.root / "beach.jpg.json").write_text(json.dumps({
+            "title": "beach.jpg",
+            "photoTakenTime": {"timestamp": "1500000000"},
+            "geoData": {"latitude": 999.0, "longitude": 0.0, "altitude": 0.0}
+        }), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+
+    def test_self_heal_generates_live_photo_identifier_for_unpaired_companion(self):
+        self.photo("IMG_0042.jpg")
+        video = self.root / "IMG_0042.mov"
+        video.write_bytes(b"video bytes")
+        self.sidecar("IMG_0042.jpg.json", title="IMG_0042.jpg")
+        stored_ids = {}
+        def fake_get_id(path, *args):
+            return stored_ids.get(Path(path).name)
+        def fake_set_id(path, ident, *args):
+            stored_ids[Path(path).name] = ident
+        with patch("main.get_content_identifier", side_effect=fake_get_id), \
+             patch("main.set_content_identifier", side_effect=fake_set_id), \
+             patch("main.set_image_metadata"), \
+             patch("main.set_video_metadata"):
+            summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertIn("IMG_0042.mov", stored_ids)
+        self.assertTrue(stored_ids["IMG_0042.mov"])
+
+    def test_expanded_formats_support_matching(self):
+        from matching import detect_media_extension, MEDIA_EXTENSIONS
+        for ext in (".dng", ".gif", ".bmp", ".raw", ".cr2", ".nef", ".arw", ".avi", ".wmv"):
+            self.assertIn(ext, MEDIA_EXTENSIONS)
+        gif_header = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+        gif_path = self.root / "animation.gif"
+        gif_path.write_bytes(gif_header)
+        self.assertEqual(detect_media_extension(gif_path), ".gif")
+
+    def test_creation_time_fallback_when_photo_taken_time_is_epoch_zero(self):
+        source = self.photo("vacation.jpg")
+        (self.root / "vacation.jpg.json").write_text(json.dumps({
+            "title": "vacation.jpg",
+            "photoTakenTime": {"timestamp": "0"},
+            "creationTime": {"timestamp": "1620000000"}
+        }), encoding="utf-8")
+        summary = self.run_process()
+        self.assertEqual(summary.get("restored"), 1)
+        output = self.root / "MatchedMedia" / source.name
+        self.assertEqual(int(output.stat().st_mtime), 1620000000)
+
+    def test_parse_filename_timestamp_messaging_patterns(self):
+        from metadata import parse_filename_timestamp
+        # WhatsApp image & video
+        ts_wa = parse_filename_timestamp("IMG-20201015-WA0004.jpg")
+        self.assertIsNotNone(ts_wa)
+        dt_wa = datetime.fromtimestamp(ts_wa).astimezone()
+        self.assertEqual((dt_wa.year, dt_wa.month, dt_wa.day), (2020, 10, 15))
+
+        ts_wa_vid = parse_filename_timestamp("VID-20210325-WA0012.mp4")
+        self.assertIsNotNone(ts_wa_vid)
+        dt_wa_vid = datetime.fromtimestamp(ts_wa_vid).astimezone()
+        self.assertEqual((dt_wa_vid.year, dt_wa_vid.month, dt_wa_vid.day), (2021, 3, 25))
+
+        # Signal pattern
+        ts_signal = parse_filename_timestamp("signal-2021-08-15-14-30-22.jpg")
+        self.assertIsNotNone(ts_signal)
+        dt_sig = datetime.fromtimestamp(ts_signal).astimezone()
+        self.assertEqual((dt_sig.year, dt_sig.month, dt_sig.day, dt_sig.hour, dt_sig.minute, dt_sig.second), (2021, 8, 15, 14, 30, 22))
+
+        # Telegram pattern
+        ts_tg = parse_filename_timestamp("photo_2022-01-05_09-15-30.jpg")
+        self.assertIsNotNone(ts_tg)
+        dt_tg = datetime.fromtimestamp(ts_tg).astimezone()
+        self.assertEqual((dt_tg.year, dt_tg.month, dt_tg.day, dt_tg.hour, dt_tg.minute, dt_tg.second), (2022, 1, 5, 9, 15, 30))
+
+    def test_container_datetime_fallback_when_sidecar_has_no_time_and_no_filename_regex(self):
+        source = self.photo("family.jpg")
+        exif_dict = {"0th": {}, "Exif": {piexif.ExifIFD.DateTimeOriginal: b"2021:05:10 11:22:33"}, "GPS": {}, "1st": {}, "thumbnail": None}
+        piexif.insert(piexif.dump(exif_dict), str(source))
+        (self.root / "family.jpg.json").write_text(json.dumps({
+            "title": "family.jpg",
+            "photoTakenTime": {}
+        }), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        expected_ts = int(datetime.strptime("2021:05:10 11:22:33", "%Y:%m:%d %H:%M:%S").astimezone().timestamp())
+        output = self.root / "MatchedMedia" / source.name
+        self.assertEqual(int(output.stat().st_mtime), expected_ts)
+
+
+class HardwareGovernorTests(unittest.TestCase):
+    def test_hardware_specs_detection(self):
+        from governor import get_hardware_specs
+        specs = get_hardware_specs()
+        self.assertGreaterEqual(specs["cores"], 1)
+        self.assertGreaterEqual(specs["physical_cores"], 1)
+        self.assertGreaterEqual(specs["ram_gb"], 2)
+        self.assertGreaterEqual(specs["est_gb"], 5)
+        self.assertIn("est_files", specs)
+        self.assertEqual(specs["est_min"], 18)
+
+    def test_hardware_note_localization(self):
+        from governor import get_hardware_note
+        en_note = get_hardware_note("en")
+        self.assertIn("Detected:", en_note)
+        self.assertIn("threads", en_note)
+        self.assertIn("Adaptive Governor: Active", en_note)
+
+        es_note = get_hardware_note("es")
+        self.assertIn("Detectado:", es_note)
+        self.assertIn("hilos", es_note)
+        self.assertIn("Gobernador adaptativo: Activo", es_note)
+
+    def test_adaptive_governor_gentle_mode_on_high_cpu(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=1)
+        with patch("psutil.cpu_percent", return_value=85.0), patch("time.sleep") as sleeper:
+            governor.govern()
+            self.assertEqual(governor.mode, "gentle")
+            self.assertGreater(governor.sleep_seconds, 0)
+            sleeper.assert_called_once_with(governor.sleep_seconds)
+
+    def test_adaptive_governor_burst_mode_on_low_cpu(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=1)
+        with patch("psutil.cpu_percent", return_value=25.0), patch("time.sleep") as sleeper:
+            governor.govern()
+            self.assertEqual(governor.mode, "burst")
+            self.assertEqual(governor.sleep_seconds, 0.0)
+            sleeper.assert_not_called()
+
+    def test_adaptive_governor_gc_periodic_collection(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=100, gc_every=5)
+        with patch("gc.collect") as gc_mock:
+            for _ in range(12):
+                governor.govern()
+            self.assertEqual(gc_mock.call_count, 2)
+
+
+class TakeoutConsolidatorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def test_is_takeout_partition(self):
+        from consolidator import is_takeout_partition
+        p1 = self.root / "Takeout Part 01"
+        p1.mkdir()
+        self.assertTrue(is_takeout_partition(p1))
+
+        p2 = self.root / "Random_Folder"
+        p2.mkdir()
+        self.assertFalse(is_takeout_partition(p2))
+        (p2 / "Google Photos").mkdir()
+        self.assertTrue(is_takeout_partition(p2))
+
+    def test_consolidate_multi_part_takeouts(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout Part 01" / "Google Photos" / "Photos from 2020"
+        part2 = self.root / "Takeout Part 02" / "Google Photos" / "Photos from 2020"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        img1 = part1 / "img1.jpg"
+        img1.write_bytes(b"content-1")
+        (part1 / "img1.jpg.json").write_text('{"title": "img1.jpg"}', encoding="utf-8")
+
+        img2 = part2 / "img2.jpg"
+        img2.write_bytes(b"content-2")
+        (part2 / "img2.jpg.json").write_text('{"title": "img2.jpg"}', encoding="utf-8")
+
+        target = consolidate_takeout_partitions(self.root)
+        self.assertEqual(target, self.root / "Takeout_Consolidated")
+
+        merged_album = target / "Photos from 2020"
+        self.assertTrue((merged_album / "img1.jpg").is_file())
+        self.assertTrue((merged_album / "img1.jpg.json").is_file())
+        self.assertTrue((merged_album / "img2.jpg").is_file())
+        self.assertTrue((merged_album / "img2.jpg.json").is_file())
+
+    def test_consolidate_identical_duplicate_skips(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout 1" / "Google Photos" / "Vacation"
+        part2 = self.root / "Takeout 2" / "Google Photos" / "Vacation"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        (part1 / "beach.jpg").write_bytes(b"identical image content")
+        (part2 / "beach.jpg").write_bytes(b"identical image content")
+
+        target = consolidate_takeout_partitions(self.root)
+        merged_album = target / "Vacation"
+        self.assertTrue((merged_album / "beach.jpg").is_file())
+        self.assertFalse((merged_album / "beach(1).jpg").exists())
+
+    def test_consolidate_content_collision_renames_media_and_couples_json(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout 1" / "Google Photos" / "Vacation"
+        part2 = self.root / "Takeout 2" / "Google Photos" / "Vacation"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        (part1 / "beach.jpg").write_bytes(b"image 1 content")
+        (part1 / "beach.jpg.json").write_text('{"title": "beach 1"}', encoding="utf-8")
+
+        (part2 / "beach.jpg").write_bytes(b"completely different image 2")
+        (part2 / "beach.jpg.json").write_text('{"title": "beach 2"}', encoding="utf-8")
+
+        target = consolidate_takeout_partitions(self.root)
+        merged_album = target / "Vacation"
+        self.assertTrue((merged_album / "beach.jpg").is_file())
+        self.assertTrue((merged_album / "beach.jpg.json").is_file())
+        self.assertTrue((merged_album / "beach(1).jpg").is_file())
+        self.assertTrue((merged_album / "beach(1).jpg.json").is_file())
+
+
+class Version32Tests(unittest.TestCase):
+    def test_app_version_is_3_3(self):
+        from window import APP_VERSION
+        self.assertEqual(APP_VERSION, "3.3")
+
+    def test_merge_takeouts_preference_validation(self):
+        from preferences import validate_preferences
+        prefs = validate_preferences({"merge_takeouts": True})
+        self.assertTrue(prefs["merge_takeouts"])
+
+
+class StreamCorruptionAndMotionPhotoRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.window = RecordingWindow()
+
+    def run_process(self, **options):
+        return mainProcess(str(self.root), self.window, "", **options)
+
+    def test_self_heal_rescues_truncated_mdat_atom_video(self):
+        video = self.root / "truncated.mp4"
+        video.write_bytes(b"damaged mp4 data")
+        (self.root / "truncated.mp4.json").write_text(json.dumps({
+            "title": "truncated.mp4",
+            "photoTakenTime": {"timestamp": "1659463715"}
+        }), encoding="utf-8")
+
+        with patch("main.set_video_metadata", side_effect=RuntimeError("ExifTool failed: Error: Truncated mdat atom")), \
+             patch("main.run_exiftool", side_effect=RuntimeError("Error: Truncated mdat atom")):
+            summary = self.run_process(self_heal=True)
+
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertAlmostEqual((self.root / "MatchedMedia" / "truncated.mp4").stat().st_mtime, 1659463715)
+
+    def test_self_heal_motion_photo_proceeds_even_if_container_drops_identifier(self):
+        photo = self.root / "MVIMG_001.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo)
+        video = self.root / "MVIMG_001.mp4"
+        video.write_bytes(b"motion video data")
+        (self.root / "MVIMG_001.jpg.json").write_text(json.dumps({
+            "title": "MVIMG_001.jpg",
+            "photoTakenTime": {"timestamp": "1600000000"}
+        }), encoding="utf-8")
+
+        # Simulate companion pairing with synthetic ID, but reading back identifier returns None
+        with patch("main.get_content_identifier", return_value=None), \
+             patch("main.set_content_identifier"), \
+             patch("main.set_image_metadata"), \
+             patch("main.set_video_metadata"):
+            summary = self.run_process(self_heal=True)
+
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue((self.root / "MatchedMedia" / "MVIMG_001.jpg").is_file())
+        self.assertTrue((self.root / "MatchedMedia" / "MVIMG_001.mp4").is_file())
+
+    def test_self_heal_renames_jpeg_disguised_as_png_and_restores_without_error(self):
+        # A file named Screenshot.png but whose content is actually a JPEG
+        fake_png = self.root / "Screenshot.png"
+        Image.new("RGB", (16, 16), "yellow").save(fake_png, format="JPEG")
+        (self.root / "Screenshot.png.json").write_text(json.dumps({
+            "title": "Screenshot.png",
+            "photoTakenTime": {"timestamp": "1720000000"}
+        }), encoding="utf-8")
+
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertNotIn("error", summary)
+        # Should be renamed to .jpg and placed in output
+        self.assertTrue((self.root / "MatchedMedia" / "Screenshot.jpg").is_file())
+
+    def test_self_heal_recovers_empty_or_corrupt_json_sidecar(self):
+        photo = self.root / "IMG_20220619_184352.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo, format="JPEG")
+        # 0-byte JSON sidecar
+        (self.root / "IMG_20220619_184352.jpg.json").write_bytes(b"")
+
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertNotIn("error", summary)
+
+    def test_parse_filename_timestamp_snapchat_epoch(self):
+        from metadata import parse_filename_timestamp
+        self.assertEqual(parse_filename_timestamp("Snapchat-1482486059.mp4"), 1482486059)
+
+
+class Version33EnterpriseFeaturesTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.window = RecordingWindow()
+
+    def test_crash_proof_journal_immediate_fsync_and_read(self):
+        from journal import CrashProofReportJournal
+        csv_file = self.root / "matching-journal.csv"
+        journal = CrashProofReportJournal(csv_file)
+        journal.record("sidecar.json", "photo.jpg", "restored", "exact", "Applied EXIF")
+        self.assertEqual(journal.record_count, 1)
+        with csv_file.open(encoding="utf-8-sig") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["media"], "photo.jpg")
+        self.assertEqual(rows[0]["status"], "restored")
+
+    def test_detect_prior_progress_with_partial_journal(self):
+        from journal import detect_prior_progress
+        # Create media and json
+        (self.root / "photo.jpg").write_bytes(b"data")
+        (self.root / "orphan.jpg").write_bytes(b"data")
+        (self.root / "photo.jpg.json").write_text("{}", encoding="utf-8")
+        # Create a mock previous report
+        report = self.root / "matching-report-previous.csv"
+        report.write_text("json,media,status,rule,details\nphoto.jpg.json,photo.jpg,restored,exact,\n", encoding="utf-8")
+
+        res = detect_prior_progress(self.root)
+        self.assertEqual(res["total_media"], 2)
+        self.assertEqual(res["total_jsons"], 1)
+        self.assertTrue(res["has_prior_report"])
+        self.assertEqual(res["prior_restored"], 1)
+        self.assertEqual(res["standalone_media"], 1)
+
+    def test_dynamic_folder_metrics_and_eta(self):
+        from governor import inspect_folder_metrics, calculate_dynamic_eta
+        (self.root / "file1.bin").write_bytes(b"x" * 1024)
+        (self.root / "file2.bin").write_bytes(b"y" * 2048)
+        metrics = inspect_folder_metrics(self.root)
+        self.assertEqual(metrics["total_files"], 2)
+        self.assertEqual(metrics["total_bytes"], 3072)
+        eta = calculate_dynamic_eta(30000, threads=4)
+        self.assertIn("mins", eta)
+
+    def test_concurrency_multi_threaded_execution(self):
+        # Create 4 photos and sidecars
+        for i in range(4):
+            img_path = self.root / f"photo_{i}.jpg"
+            Image.new("RGB", (16, 16), "blue").save(img_path, format="JPEG")
+            (self.root / f"photo_{i}.jpg.json").write_text(json.dumps({
+                "title": f"photo_{i}.jpg",
+                "photoTakenTime": {"timestamp": "1720000000"}
+            }), encoding="utf-8")
+
+        summary = mainProcess(str(self.root), self.window, "", concurrency=4, self_heal=True)
+        self.assertEqual(summary.get("restored"), 4)
+        self.assertNotIn("error", summary)
+        # Check that matching-journal.csv was written in real-time
+        self.assertTrue((self.root / "MatchedMedia" / "matching-journal.csv").is_file())
+
+    def test_detect_multipart_takeout_direct(self):
+        from consolidator import detect_multipart_takeout
+        p1 = self.root / "Takeout Part 01" / "Google Photos"
+        p2 = self.root / "Takeout Part 02" / "Google Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        root_parent, partitions = detect_multipart_takeout(self.root)
+        self.assertEqual(root_parent.resolve(), self.root.resolve())
+        self.assertEqual(len(partitions), 2)
+
+    def test_detect_multipart_takeout_from_child_part(self):
+        from consolidator import detect_multipart_takeout
+        p1 = self.root / "Takeout Part 01" / "Google Photos"
+        p2 = self.root / "Takeout Part 02" / "Google Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        # Select p1 directly instead of parent
+        root_parent, partitions = detect_multipart_takeout(self.root / "Takeout Part 01")
+        self.assertEqual(root_parent.resolve(), self.root.resolve())
+        self.assertEqual(len(partitions), 2)
+
+    def test_consolidate_custom_dest_folder_name(self):
+        from consolidator import consolidate_takeout_partitions
+        p1 = self.root / "takeout-001" / "Photos"
+        p2 = self.root / "takeout-002" / "Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        (p1 / "pic1.jpg").write_bytes(b"111")
+        (p2 / "pic2.jpg").write_bytes(b"222")
+        dest = consolidate_takeout_partitions(self.root, dest_folder_name="Custom_Merged_Archive")
+        self.assertEqual(dest.name, "Custom_Merged_Archive")
+        self.assertTrue((dest / "pic1.jpg").is_file())
+        self.assertTrue((dest / "pic2.jpg").is_file())
+        self.assertTrue((dest / ".gpm_consolidated").is_file())
+
+    def test_multipart_dialog_and_translations(self):
+        from translations import text
+        for lang in ("en", "es"):
+            self.assertTrue(text(lang, "multipart_dialog_title"))
+            self.assertTrue(text(lang, "multipart_dialog_desc"))
+            self.assertIn("4", text(lang, "multipart_detected_parts_header", count=4))
+            self.assertTrue(text(lang, "multipart_folder_name_label"))
+            self.assertTrue(text(lang, "multipart_confirm"))
+            self.assertTrue(text(lang, "multipart_skip"))
 
 
 if __name__ == "__main__":

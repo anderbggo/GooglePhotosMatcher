@@ -3,6 +3,7 @@ import io
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ import PySimpleGUI as sg
 from PIL import Image
 
 from exiftool_runner import exiftool_batch, get_exiftool_path, resource_path, run_exiftool
+from governor import get_hardware_note
 from main import mainProcess
 from metadata import set_image_metadata
 from preferences import (
@@ -38,7 +40,7 @@ if sys.version_info >= (3, 14):
 PALETTE = LIGHT_PALETTE
 FONT = "Segoe UI" if platform.system() == "Windows" else "Helvetica"
 DISPLAY_FONT = "Bahnschrift" if platform.system() == "Windows" else "Avenir Next"
-APP_VERSION = "3.1"
+APP_VERSION = "3.3"
 PROJECT_LINKS = {
     "About": "https://anderbggo.github.io/gpmatcher",
     "Support": "https://anderbggo.github.io/contribute",
@@ -99,7 +101,10 @@ def _install_button_feedback(window, keys=("Match", "Preview", "Force", "Cancel"
     renderers = {}
     bindings = []
     for key in keys:
-        widget = window[key].Widget
+        try:
+            widget = window[key].Widget
+        except (KeyError, TypeError, AttributeError):
+            continue
         state = {"hover": False, "pressed": False, "focus": False}
 
         def render(widget=widget, key=key, state=state):
@@ -198,13 +203,128 @@ def _style_native_controls(window):
         previous.pack_forget()
         log.vsb = ttk.Scrollbar(previous.master, orient="vertical", command=log.Widget.yview, style="Gpm.Vertical.TScrollbar")
         log.vsb.pack(**layout, before=log.Widget)
-        log.Widget.configure(yscrollcommand=log.vsb.set)
         previous.destroy()
     else:
         log.vsb.configure(style="Gpm.Vertical.TScrollbar")
+    _setup_log_autoscroll(window)
     for option, value in (("background", palette["panel"]), ("foreground", palette["text"]), ("selectBackground", palette["accent"]), ("selectForeground", palette["on_accent"])):
         window.TKroot.option_add(f"*TCombobox*Listbox.{option}", value)
     window["-IN2-"].Widget.configure(relief="flat", highlightthickness=1, highlightbackground=palette["line"], highlightcolor=palette["accent"], insertbackground=palette["text"], background=palette["input_bg"], foreground=palette["text"], disabledbackground=palette["panel_alt"], disabledforeground=palette["muted"], readonlybackground=palette["input_bg"])
+
+
+def _set_autoscroll(window, enabled):
+    window.gpm_autoscroll = bool(enabled)
+    button = getattr(window, "gpm_scroll_bottom_button", None)
+    if button is not None:
+        try:
+            if enabled:
+                button.place_forget()
+            else:
+                button.place(relx=1.0, rely=1.0, x=-14, y=-14, anchor="se")
+                button.lift()
+        except (tkinter.TclError, AttributeError):
+            pass
+
+
+def _scroll_to_bottom(window):
+    _set_autoscroll(window, True)
+    try:
+        log = window["-LOG-"]
+        log.Widget.see(tkinter.END)
+    except (KeyError, TypeError, AttributeError, tkinter.TclError):
+        pass
+
+
+def _setup_log_autoscroll(window):
+    try:
+        log = window["-LOG-"]
+        if not hasattr(log, "Widget") or not isinstance(log.Widget, tkinter.Text):
+            return
+    except (KeyError, TypeError):
+        return
+
+    if not hasattr(window, "gpm_autoscroll"):
+        window.gpm_autoscroll = True
+
+    palette = _window_palette(window)
+    language = _window_language(window)
+    button = getattr(window, "gpm_scroll_bottom_button", None)
+    if button is None:
+        button = tkinter.Button(
+            log.Widget,
+            text="↓",
+            font=(FONT, 11, "bold"),
+            cursor="hand2",
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=palette["line"],
+            background=palette["panel_alt"],
+            foreground=palette["text"],
+            activebackground=palette["accent"],
+            activeforeground=palette["on_accent"],
+            padx=7,
+            pady=3,
+            command=lambda: _scroll_to_bottom(window),
+        )
+        button.bind("<Enter>", lambda e: button.configure(background=palette["accent"], foreground=palette["on_accent"]))
+        button.bind("<Leave>", lambda e: button.configure(background=palette["panel_alt"], foreground=palette["text"]))
+        try:
+            sg.ToolTip(button, text=text(language, "scroll_bottom"))
+        except Exception:
+            pass
+        window.gpm_scroll_bottom_button = button
+
+        def _check_scroll_position(event=None):
+            try:
+                yv = log.Widget.yview()
+                if yv[1] >= 0.999:
+                    _set_autoscroll(window, True)
+                else:
+                    _set_autoscroll(window, False)
+            except (ValueError, TypeError, tkinter.TclError):
+                pass
+
+        def _on_mousewheel(event):
+            if event.delta > 0:
+                _set_autoscroll(window, False)
+            else:
+                log.Widget.after(30, _check_scroll_position)
+
+        log.Widget.bind("<MouseWheel>", _on_mousewheel, add="+")
+        log.Widget.bind("<Button-4>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Button-5>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<Prior>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Up>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Home>", lambda e: _set_autoscroll(window, False), add="+")
+        log.Widget.bind("<Next>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<Down>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.Widget.bind("<End>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+
+        log.vsb.bind("<Button-1>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.vsb.bind("<B1-Motion>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+        log.vsb.bind("<ButtonRelease-1>", lambda e: log.Widget.after(30, _check_scroll_position), add="+")
+    else:
+        try:
+            button.configure(
+                highlightbackground=palette["line"],
+                background=palette["panel_alt"],
+                foreground=palette["text"],
+                activebackground=palette["accent"],
+                activeforeground=palette["on_accent"],
+            )
+        except (tkinter.TclError, AttributeError):
+            pass
+
+    def _on_log_yscroll(first, last):
+        try:
+            log.vsb.set(first, last)
+            if float(last) >= 0.999 and not getattr(window, "gpm_autoscroll", True):
+                _set_autoscroll(window, True)
+        except (ValueError, TypeError, tkinter.TclError):
+            pass
+
+    log.Widget.configure(yscrollcommand=_on_log_yscroll)
 
 
 def _log_color(message, palette):
@@ -217,10 +337,16 @@ def _log_color(message, palette):
 
 def _append_log(window, message):
     history = getattr(window, "gpm_log", None)
+    autoscroll = getattr(window, "gpm_autoscroll", True)
     if isinstance(history, deque):
         history.append(message)
         palette = _window_palette(window)
-        window["-LOG-"].print(localize_message(message, _window_language(window)), text_color=_log_color(message, palette), background_color=palette["input_bg"])
+        window["-LOG-"].print(
+            localize_message(message, _window_language(window)),
+            text_color=_log_color(message, palette),
+            background_color=palette["input_bg"],
+            autoscroll=autoscroll,
+        )
     else:
         window["-LOG-"].print(localize_message(message, _window_language(window)))
 
@@ -265,20 +391,46 @@ def _apply_preferences(window, values, persist=False):
         "-MATCHED-label": "matched", "-ERRORS-label": "errors", "-UNMATCHED-label": "unmatched",
     }
     for key, translation in labels.items():
-        window[key].update(text(language, translation))
+        try:
+            window[key].update(text(language, translation))
+        except (KeyError, TypeError):
+            pass
+    try:
+        window["-IN_PLACE-"].update(value=values.get("in_place", False), text=text(language, "in_place"))
+        window["-IN_PLACE-"].set_tooltip(text(language, "in_place_tip"))
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-SELF_HEAL-"].update(value=values.get("self_heal", True), text=text(language, "self_heal"))
+        window["-SELF_HEAL-"].set_tooltip(text(language, "self_heal_tip"))
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-MERGE_TAKEOUTS-"].update(value=values.get("merge_takeouts", False), text=text(language, "merge_takeouts"))
+        window["-MERGE_TAKEOUTS-"].set_tooltip(text(language, "merge_takeouts_tip"))
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-HARDWARE_NOTE-"].update(get_hardware_note(language))
+    except (KeyError, TypeError):
+        pass
     for key, options, selected in (("-THEME-", THEME_OPTIONS, values["theme"]), ("-LANGUAGE-", LANGUAGE_OPTIONS, values["language"])):
         labels = _choice_labels(language, options)
         window[key].update(values=labels, value=labels[options.index(selected)])
     for key, translation in (("About", "about_tip"), ("Support", "support_tip"), ("Force", "force_tip"), ("-THEME-", "theme_tip"), ("-LANGUAGE-", "language_tip")):
-        window[key].set_tooltip(text(language, translation))
+        try:
+            window[key].set_tooltip(text(language, translation))
+        except (KeyError, TypeError):
+            pass
     _install_button_feedback(window)
     _update_counters(window, window.gpm_summary)
     status = window.gpm_status
     _set_status(window, **status)
     window["-LOG-"].update("")
     palette = _window_palette(window)
+    autoscroll = getattr(window, "gpm_autoscroll", True)
     for message in window.gpm_log:
-        window["-LOG-"].print(localize_message(message, language), text_color=_log_color(message, palette), background_color=palette["input_bg"])
+        window["-LOG-"].print(localize_message(message, language), text_color=_log_color(message, palette), background_color=palette["input_bg"], autoscroll=autoscroll)
     if persist:
         try:
             save_preferences(values)
@@ -322,8 +474,13 @@ def build_window(preferences=None):
     ]], pad=(28, 8), background_color=palette["panel"])
     settings = panel([
         [sg.Text(text(language, "folder"), key="-FOLDER_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 10)))],
-        [sg.Input(key="-IN2-", size=(46, 1), expand_x=True, border_width=0, pad=((0, 12), (0, 0))),
+        [sg.Input(key="-IN2-", size=(46, 1), expand_x=True, border_width=0, enable_events=True, pad=((0, 12), (0, 0))),
          sg.FolderBrowse(text(language, "browse"), key="-BROWSE_FOLDER-", target="-IN2-", size=(15, 1), button_color=(palette["text"], palette["panel_alt"]))],
+        [
+            sg.Checkbox(text(language, "in_place"), key="-IN_PLACE-", default=preferences.get("in_place", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "in_place_tip"), pad=((0, 16), (8, 0))),
+            sg.Checkbox(text(language, "self_heal"), key="-SELF_HEAL-", default=preferences.get("self_heal", True), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "self_heal_tip"), pad=((0, 16), (8, 0))),
+            sg.Checkbox(text(language, "merge_takeouts"), key="-MERGE_TAKEOUTS-", default=preferences.get("merge_takeouts", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "merge_takeouts_tip"), pad=((0, 0), (8, 0))),
+        ],
     ], pad=(28, 12), background_color=palette["panel"])
     actions = panel([[
         sg.Button(text(language, "match"), key="Match", size=(15, 1), font=(FONT, 11, "bold"), border_width=0, pad=((0, 12), (0, 0))),
@@ -342,7 +499,8 @@ def build_window(preferences=None):
         counter_column(text(language, "unmatched"), "-UNMATCHED-", palette["warning"], palette),
     ]], pad=(28, 16), background_color=palette["input_bg"])
     status = panel([
-        [sg.Text(text(language, "activity"), key="-ACTIVITY_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 6)))],
+        [sg.Text(text(language, "activity"), key="-ACTIVITY_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 4)))],
+        [sg.Text(get_hardware_note(language), key="-HARDWARE_NOTE-", font=(FONT, 9), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (0, 6)))],
         [sg.Text(text(language, "ready"), key="-PROGRESS_LABEL-", size=(72, 2), expand_x=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["muted"], pad=((0, 0), (0, 6)))],
         [sg.ProgressBar(100, orientation="h", size=(48, 8), expand_x=True, border_width=0, bar_color=(palette["accent"], palette["panel_alt"]), key="-PROGRESS_BAR-", pad=((0, 0), (0, 12)))],
         [sg.Multiline(size=(74, 6), key="-LOG-", expand_x=True, expand_y=True, autoscroll=True, disabled=True, border_width=0, background_color=palette["input_bg"], text_color=palette["text"], font=("Consolas" if platform.system() == "Windows" else "Menlo", 10))],
@@ -379,7 +537,18 @@ def build_window(preferences=None):
 def _set_busy(window, busy):
     palette = _window_palette(window)
     for key in ("Preview", "Match", "-IN2-", "-BROWSE_FOLDER-"):
-        window[key].update(disabled=busy)
+        try:
+            window[key].update(disabled=busy)
+        except (KeyError, TypeError):
+            pass
+    try:
+        window["-IN_PLACE-"].update(disabled=busy)
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-SELF_HEAL-"].update(disabled=busy)
+    except (KeyError, TypeError):
+        pass
     window["Match"].update(button_color=(palette["muted"], palette["panel_alt"]) if busy else (palette["on_accent"], palette["accent"]))
     window["Cancel"].update(disabled=not busy)
     if busy:
@@ -422,6 +591,57 @@ def _confirm_backup(window, folder, prefix="backup"):
         dialog.close()
 
 
+def _build_multipart_dialog(window, root_parent: Path, partitions: list[Path]):
+    palette = _window_palette(window)
+    language = _window_language(window)
+    parts_summary = "\n".join(f"  \u2022 {p.name}" for p in partitions[:8])
+    if len(partitions) > 8:
+        parts_summary += f"\n  ... and {len(partitions) - 8} more parts"
+
+    default_name = "Takeout_Consolidated"
+
+    layout = [
+        [sg.Text(text(language, "multipart_dialog_title"), font=(DISPLAY_FONT, 16, "bold"), text_color=palette["accent"], background_color=palette["panel"], pad=((0, 0), (0, 10)))],
+        [sg.Text(text(language, "multipart_dialog_desc"), size=(68, None), font=(FONT, 10), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 10)))],
+        [sg.Text(text(language, "multipart_detected_parts_header", count=len(partitions)), font=(FONT, 9, "bold"), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (2, 2)))],
+        [sg.Multiline(parts_summary, size=(66, min(5, max(3, len(partitions)))), disabled=True, no_scrollbar=len(partitions) <= 5, font=("Consolas" if platform.system() == "Windows" else "Courier", 9), background_color=palette["panel_alt"], text_color=palette["text"], border_width=0, pad=((0, 0), (0, 12)))],
+        [sg.Text(text(language, "multipart_folder_name_label"), font=(FONT, 10, "bold"), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 4)))],
+        [sg.Input(default_name, key="-DEST_NAME-", size=(46, 1), font=(FONT, 10), text_color=palette["text"], background_color=palette["input_bg"], border_width=0, pad=((0, 0), (0, 4)))],
+        [sg.Text(text(language, "multipart_parent_hint", parent=str(root_parent)), font=(FONT, 8), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (0, 12)))],
+        [sg.Checkbox(text(language, "multipart_consolidate_now"), default=True, key="-NOW-", font=(FONT, 9), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 14)))],
+        [sg.Push(background_color=palette["panel"]),
+         sg.Button(text(language, "multipart_skip"), key="Skip", size=(14, 1), button_color=(palette["text"], palette["panel_alt"]), pad=((0, 12), (0, 0))),
+         sg.Button(text(language, "multipart_confirm"), key="Confirm", size=(22, 1), bind_return_key=True, button_color=(palette["on_accent"], palette["accent"]))],
+    ]
+    dialog = sg.Window(text(language, "multipart_dialog_title"), layout, modal=True, finalize=True, background_color=palette["panel"], margins=(24, 20), keep_on_top=True)
+    dialog.gpm_palette = palette
+    _install_button_feedback(dialog, ("Confirm", "Skip"))
+    dialog.bind("<Escape>", "Skip")
+    try:
+        dialog["-DEST_NAME-"].Widget.configure(relief="flat", highlightthickness=1, highlightbackground=palette["line"], highlightcolor=palette["accent"], insertbackground=palette["text"], background=palette["input_bg"], foreground=palette["text"])
+        dialog["-DEST_NAME-"].Widget.focus_set()
+        dialog["-DEST_NAME-"].Widget.select_range(0, "end")
+    except Exception:
+        pass
+    return dialog
+
+
+def _prompt_multipart_dialog(window, root_parent: Path, partitions: list[Path]):
+    dialog = _build_multipart_dialog(window, root_parent, partitions)
+    try:
+        event, values = dialog.read()
+        if event == "Confirm":
+            dest_name = values.get("-DEST_NAME-", "").strip()
+            dest_name = re.sub(r'[<>:"/\\|?*]', '_', dest_name)
+            if not dest_name:
+                dest_name = "Takeout_Consolidated"
+            consolidate_now = bool(values.get("-NOW-", True))
+            return True, dest_name, consolidate_now
+        return False, "", False
+    finally:
+        dialog.close()
+
+
 def run_app():
     window = build_window()
     cancel_event = threading.Event()
@@ -458,11 +678,15 @@ def run_app():
             cancel_event.clear()
             summary = {}
             window.gpm_summary = summary
-            results_folder = str(folder.resolve() / "MatchedMedia")
+            in_place = bool(values.get("-IN_PLACE-", False))
+            self_heal = bool(values.get("-SELF_HEAL-", True))
+            merge_takeouts = bool(values.get("-MERGE_TAKEOUTS-", False))
+            results_folder = str(folder.resolve()) if in_place else str(folder.resolve() / "MatchedMedia")
             _set_busy(window, True)
             window["Report"].update(disabled=True)
             window["Results"].update(disabled=True)
             window["-LOG-"].update("")
+            _set_autoscroll(window, True)
             history = getattr(window, "gpm_log", None)
             if isinstance(history, deque):
                 history.clear()
@@ -470,8 +694,147 @@ def run_app():
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, **({"force": True} if event == "Force" else {})}, daemon=True)
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, "concurrency": "Auto", "custom_consolidated_name": getattr(window, "gpm_custom_consolidated_name", None), **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
+        elif event == "-IN2-":
+            folder_str = values.get("-IN2-", "").strip()
+            def _async_scan_and_detect(f_path, lang):
+                try:
+                    from governor import get_dynamic_folder_note
+                    from journal import detect_prior_progress
+                    from consolidator import detect_multipart_takeout
+                    folder_obj = Path(f_path).resolve()
+                    if folder_obj.is_dir():
+                        note = get_dynamic_folder_note(f_path, language=lang)
+                        audit = detect_prior_progress(folder_obj)
+                        window.write_event_value("-AUTO_DETECT_RESULT-", (note, audit))
+                        root_parent, partitions = detect_multipart_takeout(folder_obj)
+                        if len(partitions) > 1:
+                            window.write_event_value("-PROMPT_MULTIPART-", (str(root_parent), [str(p) for p in partitions]))
+                except Exception:
+                    pass
+
+            threading.Thread(target=_async_scan_and_detect, args=(folder_str, _window_language(window)), daemon=True).start()
+        elif event == "-PROMPT_MULTIPART-":
+            root_parent_str, parts_list = values[event]
+            prompted = getattr(window, "gpm_prompted_multiparts", None)
+            if prompted is None:
+                prompted = set()
+                window.gpm_prompted_multiparts = prompted
+            if root_parent_str not in prompted:
+                prompted.add(root_parent_str)
+                current_in2 = values.get("-IN2-", "").strip()
+                if current_in2:
+                    try:
+                        prompted.add(str(Path(current_in2).resolve()))
+                    except Exception:
+                        pass
+
+                parent_path = Path(root_parent_str)
+                parts_paths = [Path(p) for p in parts_list]
+                confirmed, dest_name, consolidate_now = _prompt_multipart_dialog(window, parent_path, parts_paths)
+                lang = _window_language(window)
+                if confirmed:
+                    window.gpm_custom_consolidated_name = dest_name
+                    window["-MERGE_TAKEOUTS-"].update(True)
+                    preferences = dict(window.gpm_preferences)
+                    preferences["merge_takeouts"] = True
+                    window.gpm_preferences = preferences
+                    try:
+                        save_preferences(preferences)
+                    except OSError:
+                        pass
+
+                    if consolidate_now:
+                        _set_busy(window, True)
+                        _set_status(window, message=text(lang, "multipart_merging_status", count=len(parts_paths), dest=dest_name), color="accent")
+                        _append_log(window, f"Consolidating {len(parts_paths)} Takeout partitions into '{dest_name}'...")
+
+                        def _do_consolidation(p_root, d_name):
+                            try:
+                                from consolidator import consolidate_takeout_partitions
+                                new_root = consolidate_takeout_partitions(p_root, window, cancel_event, dest_folder_name=d_name)
+                                window.write_event_value("-CONSOLIDATION_DONE-", str(new_root))
+                            except Exception as err:
+                                window.write_event_value("-CONSOLIDATION_ERROR-", str(err))
+
+                        threading.Thread(target=_do_consolidation, args=(parent_path, dest_name), daemon=True).start()
+                    else:
+                        _append_log(window, f"Multi-part merge enabled: will consolidate {len(parts_paths)} parts into '{dest_name}' when Match is clicked.")
+                else:
+                    window["-MERGE_TAKEOUTS-"].update(False)
+                    preferences = dict(window.gpm_preferences)
+                    preferences["merge_takeouts"] = False
+                    window.gpm_preferences = preferences
+                    try:
+                        save_preferences(preferences)
+                    except OSError:
+                        pass
+                    _append_log(window, text(lang, "multipart_skipped_log"))
+        elif event == "-CONSOLIDATION_DONE-":
+            new_root_str = values[event]
+            _set_busy(window, False)
+            window["-IN2-"].update(new_root_str)
+            lang = _window_language(window)
+            _set_status(window, key="ready", color="success")
+            _append_log(window, text(lang, "multipart_done_log", dest=Path(new_root_str).name))
+
+            def _rescan(f_path, l):
+                try:
+                    from governor import get_dynamic_folder_note
+                    from journal import detect_prior_progress
+                    folder_obj = Path(f_path).resolve()
+                    if folder_obj.is_dir():
+                        note = get_dynamic_folder_note(f_path, language=l)
+                        audit = detect_prior_progress(folder_obj)
+                        window.write_event_value("-AUTO_DETECT_RESULT-", (note, audit))
+                except Exception:
+                    pass
+
+            threading.Thread(target=_rescan, args=(new_root_str, lang), daemon=True).start()
+        elif event == "-CONSOLIDATION_ERROR-":
+            err_msg = values[event]
+            _set_busy(window, False)
+            _set_status(window, message=f"Consolidation error: {err_msg}", color="danger")
+            _append_log(window, f"ERROR: Multi-part consolidation failed: {err_msg}")
+        elif event == "-AUTO_DETECT_RESULT-":
+            note, audit = values[event]
+            try:
+                window["-HARDWARE_NOTE-"].update(note)
+            except Exception:
+                pass
+            if audit and not audit.get("error"):
+                if audit.get("has_prior_report"):
+                    window["-MATCHED-"].update(format_number(audit["prior_restored"], _window_language(window)))
+                    window["-ERRORS-"].update(format_number(audit["prior_errors"], _window_language(window)))
+                    window["-UNMATCHED-"].update(format_number(audit["standalone_media"], _window_language(window)))
+                    _append_log(window, f"Auto-detected prior progress: {audit['prior_restored']} restored, {audit['prior_errors']} errors, {audit['pending_sidecars']} pending sidecars, {audit['standalone_media']} standalone media.")
+                elif audit.get("total_media", 0) > 0:
+                    window["-UNMATCHED-"].update(format_number(audit["standalone_media"], _window_language(window)))
+        elif event == "-IN_PLACE-":
+            preferences = dict(window.gpm_preferences)
+            preferences["in_place"] = bool(values["-IN_PLACE-"])
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError as error:
+                _append_log(window, text("en", "preferences_failed", detail=error))
+        elif event == "-SELF_HEAL-":
+            preferences = dict(window.gpm_preferences)
+            preferences["self_heal"] = bool(values["-SELF_HEAL-"])
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError as error:
+                _append_log(window, text("en", "preferences_failed", detail=error))
+        elif event == "-MERGE_TAKEOUTS-":
+            preferences = dict(window.gpm_preferences)
+            preferences["merge_takeouts"] = bool(values["-MERGE_TAKEOUTS-"])
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError as error:
+                _append_log(window, text("en", "preferences_failed", detail=error))
         elif event in ("-THEME-", "-LANGUAGE-"):
             options = THEME_OPTIONS if event == "-THEME-" else LANGUAGE_OPTIONS
             labels = _choice_labels(_window_language(window), options)
@@ -528,6 +891,8 @@ def run_app():
                     _append_log(window, text("en", "browser_failed", detail=PROJECT_LINKS[event]))
             except (OSError, webbrowser.Error) as error:
                 _append_log(window, text("en", "browser_failed", detail=error))
+        elif event == "-SCROLL_BOTTOM-":
+            _scroll_to_bottom(window)
     window.close()
 
 

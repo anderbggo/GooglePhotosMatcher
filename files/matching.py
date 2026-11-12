@@ -4,12 +4,17 @@ import re
 import unicodedata
 
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".heic", ".heif", ".png", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".3gp", ".m4v", ".mkv"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".tif", ".tiff", ".heic", ".heif", ".png", ".webp", ".dng", ".gif", ".bmp", ".raw", ".cr2", ".nef", ".arw"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".3gp", ".m4v", ".mkv", ".avi", ".wmv"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 EDITED_SUFFIXES = ("editado", "editada", "edited", "modifié", "modifiée", "bearbeitet", "bewerkt", "modificato", "modificata", "redigerad")
 HIDDEN_SUFFIXES = ("_PORTRAIT", "PORTRAIT", "_NFNR", "_MFNR")
-EQUIVALENT_EXTENSIONS = ({".jpg", ".jpeg"}, {".tif", ".tiff"}, {".heic", ".heif"}, {".mp4", ".m4v", ".mov", ".3gp"})
+EQUIVALENT_EXTENSIONS = (
+    {".jpg", ".jpeg"},
+    {".tif", ".tiff", ".dng", ".raw", ".cr2", ".nef", ".arw"},
+    {".heic", ".heif"},
+    {".mp4", ".m4v", ".mov", ".3gp", ".avi", ".wmv"},
+)
 HEIF_BRANDS = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"}
 
 
@@ -31,6 +36,12 @@ def detect_media_extension(filepath):
         return ".tif"
     if header.startswith(b"\x1a\x45\xdf\xa3"):
         return ".mkv"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
+        return ".gif"
+    if header.startswith(b"BM"):
+        return ".bmp"
+    if header[:4] == b"RIFF" and header[8:12] == b"AVI ":
+        return ".avi"
     if header[4:8] == b"ftyp":
         brands = header[8:min(len(header), max(int.from_bytes(header[:4], "big"), 12))]
         if b"avif" in brands:
@@ -190,10 +201,10 @@ class MediaMatcher:
                         compare_stem = re.sub(r"\(\d+\)$", "", stem) if duplicate else stem
                         compare_target = re.sub(r"\(\d+\)$", "", target_stem) if duplicate else target_stem
                         shorter = min(len(compare_stem), len(compare_target))
-                        if extension == target_extension and shorter in (46, 47, 50, 51):
+                        if extension == target_extension and (shorter in (46, 47, 50, 51) or (shorter >= 30 and (compare_stem.startswith(compare_target) or compare_target.startswith(compare_stem)))):
                             if compare_stem.startswith(compare_target) or compare_target.startswith(compare_stem):
                                 truncated_matches.add(name)
-                    elif len(target) in (46, 47, 50, 51) and normalized_name(name).startswith(normalized_name(target)):
+                    elif (len(target) in (46, 47, 50, 51) or len(target) >= 30) and normalized_name(name).startswith(normalized_name(target)):
                         truncated_matches.add(name)
             if len(truncated_matches) > 1:
                 raise AmbiguousMatchError(truncated_matches)

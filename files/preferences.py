@@ -94,7 +94,21 @@ def preference_path():
 def validate_preferences(values):
     if not isinstance(values, dict):
         values = {}
-    return {"theme": values.get("theme") if values.get("theme") in THEME_OPTIONS else "system", "language": values.get("language") if values.get("language") in LANGUAGE_OPTIONS else "system"}
+    result = {
+        "theme": values.get("theme") if values.get("theme") in THEME_OPTIONS else "system",
+        "language": values.get("language") if values.get("language") in LANGUAGE_OPTIONS else "system",
+    }
+    if "in_place" in values:
+        result["in_place"] = bool(values["in_place"])
+    if "self_heal" in values:
+        result["self_heal"] = bool(values["self_heal"])
+    if "merge_takeouts" in values:
+        result["merge_takeouts"] = bool(values["merge_takeouts"])
+    if "cpu_threads" in values:
+        result["cpu_threads"] = values["cpu_threads"]
+    if "ram_buffer" in values:
+        result["ram_buffer"] = values["ram_buffer"]
+    return result
 
 
 def load_preferences(path=None):
