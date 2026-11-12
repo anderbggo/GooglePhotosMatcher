@@ -1,16 +1,16 @@
-# Google Photos Matcher (v3.1)
+# Google Photos Matcher (v3.2)
 
-**[Download for Windows (v3.1)](https://anderbggo.github.io/gpmatcher/)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.1)
+**[Download for Windows (v3.2)](https://anderbggo.github.io/gpmatcher/)** | [Release notes](https://github.com/anderbggo/GooglePhotosMatcher/releases/tag/v3.2)
 
 Windows 64-bit. Portable: no installation, Python, or separate ExifTool setup required.
 
 > Simple tool to restore metadata (date, GPS coordinates, etc.) from Google Photos JSON files back into your original images and videos — just like [MetadataFixer](https://metadatafixer.com/pricing), but **free and open source**!
 >
-> <img width="900" height="680" alt="Google Photos Matcher v3.1 light interface" src="assets/interface-v3.png?v=3.1" />
+> <img width="900" height="680" alt="Google Photos Matcher v3.2 light interface" src="assets/interface-v3.png?v=3.2" />
 
 <details>
 <summary>Dark mode and Spanish interface</summary>
-<img width="900" height="680" alt="Google Photos Matcher v3.1 dark interface in Spanish" src="assets/interface-v3-dark.png?v=3.1" />
+<img width="900" height="680" alt="Google Photos Matcher v3.2 dark interface in Spanish" src="assets/interface-v3-dark.png?v=3.2" />
 </details>
 
 
@@ -41,7 +41,7 @@ Matching uses both the JSON filename and its `title`, including numbered duplica
 
 1. Download your _Google Photos_ media from [Google Takeout](https://takeout.google.com/) and extract the downloaded ZIP archives first. GPMatcher processes folders, not ZIP files.
 
-2. [Download GPMatcher for Windows from Release v3.1](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.1/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
+2. [Download GPMatcher for Windows from Release v3.2](https://github.com/anderbggo/GooglePhotosMatcher/releases/download/v3.2/GPMatcher.exe) and double-click it to open. Everything needed is included; no configuration or compilation is required.
 
 3. Select the folder containing your images/videos and their JSONs (e.g. `Photos from 2022` or the root `Takeout` folder)
 

@@ -551,11 +551,14 @@ def _report(root, records, in_place=False):
     return filename
 
 
-def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False, merge_takeouts=False):
     try:
         root = Path(browserPath).expanduser().resolve(strict=True)
         if not root.is_dir() or root.name in {"MatchedMedia", "EditedRaw"}:
             raise ValueError("Select the original Takeout folder, not an output folder")
+        if merge_takeouts:
+            from consolidator import consolidate_takeout_partitions
+            root = consolidate_takeout_partitions(root, window, cancel_event)
         tasks, matchers = _plan(root, editedW.strip(), window, cancel_event, force, self_heal)
         if force:
             for task in tasks:
@@ -573,8 +576,11 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
         counts = Counter(task["status"] for task in tasks if task["status"] != "pending")
         counts["unmatched"] = sum(folder / name not in covered for folder, matcher in matchers.items() for name in matcher.names)
         window.write_event_value("-UPDATE_COUNTS-", dict(counts))
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor()
         with exiftool_batch():
             for index, task in enumerate(tasks):
+                governor.govern()
                 if cancel_event is not None and cancel_event.is_set():
                     if task["status"] == "pending":
                         task.update(status="cancelled", details="Cancelled before writing")

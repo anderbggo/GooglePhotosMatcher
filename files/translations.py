@@ -10,6 +10,9 @@ TEXT = {
         "in_place_tip": "Preserve folder structure and restore media where it is without creating MatchedMedia",
         "self_heal": "Self-heal metadata (recommended)",
         "self_heal_tip": "Auto-repair corrupted EXIF, synthesize timestamps from filenames, fix invalid GPS, and synchronize Live Photos",
+        "merge_takeouts": "Merge multi-part Takeouts into one folder",
+        "merge_takeouts_tip": "Scan sibling Takeout folders, combine split years/albums (e.g. Photos from 2020 across parts), and organize sidecars before restoration",
+        "hardware_note": "Detected: {cores} threads | {ram_gb} GB RAM (Adaptive Governor: Active). Est. capacity: ~{est_gb} GB (~{est_files} files) in ~{est_min} mins on SSD.",
         "scroll_bottom": "Scroll to bottom",
         "finishing": "Finishing current file...", "invalid_folder": "Invalid Takeout folder",
         "cancelled": "Cancelled", "preview_done": "Preview complete", "done": "Restoration complete",
@@ -34,6 +37,9 @@ TEXT = {
         "in_place_tip": "Conservar la estructura de carpetas y restaurar los archivos en su lugar sin crear MatchedMedia",
         "self_heal": "Autocorrección de metadatos (recomendado)",
         "self_heal_tip": "Reparar EXIF dañado, obtener fechas del nombre de archivo, corregir GPS inválido y sincronizar Live Photos",
+        "merge_takeouts": "Consolidar partes de Takeout en una sola carpeta",
+        "merge_takeouts_tip": "Analizar carpetas de Takeout hermanas, combinar años/álbumes divididos y organizar los archivos JSON antes de restaurar",
+        "hardware_note": "Detectado: {cores} hilos | {ram_gb} GB RAM (Gobernador adaptativo: Activo). Capacidad est.: ~{est_gb} GB (~{est_files} archivos) en ~{est_min} min en SSD.",
         "scroll_bottom": "Desplazarse al final",
         "finishing": "Finalizando archivo actual...", "invalid_folder": "Carpeta de Takeout no v\u00e1lida",
         "cancelled": "Cancelado", "preview_done": "Vista previa completada", "done": "Restauraci\u00f3n completada",
@@ -77,6 +83,7 @@ SPANISH_PREFIXES = {
     "Could not save preferences: ": "No se pudieron guardar las preferencias: ",
     "Force match failed: ": "Forzado fallido: ", "Force match: ": "Forzado: ",
     "Self-healed: ": "Autorreparado: ", "Self-healing failed: ": "Autorreparación fallida: ",
+    "Consolidated: ": "Consolidado: ", "Takeout consolidation complete: ": "Consolidación de Takeout completada: ",
 }
 SPANISH_LOG_STATUS = {"RESTORED": "RESTAURADO", "ALREADY_RESTORED": "YA RESTAURADO", "PREVIEW": "VISTA PREVIA", "ERROR": "ERROR", "SKIPPED": "OMITIDO", "CANCELLED": "CANCELADO", "UNMATCHED": "SIN PAREJA", "Report": "Informe"}
 

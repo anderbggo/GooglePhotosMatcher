@@ -1429,5 +1429,147 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(int(output.stat().st_mtime), expected_ts)
 
 
+class HardwareGovernorTests(unittest.TestCase):
+    def test_hardware_specs_detection(self):
+        from governor import get_hardware_specs
+        specs = get_hardware_specs()
+        self.assertGreaterEqual(specs["cores"], 1)
+        self.assertGreaterEqual(specs["physical_cores"], 1)
+        self.assertGreaterEqual(specs["ram_gb"], 2)
+        self.assertGreaterEqual(specs["est_gb"], 5)
+        self.assertIn("est_files", specs)
+        self.assertEqual(specs["est_min"], 18)
+
+    def test_hardware_note_localization(self):
+        from governor import get_hardware_note
+        en_note = get_hardware_note("en")
+        self.assertIn("Detected:", en_note)
+        self.assertIn("threads", en_note)
+        self.assertIn("Adaptive Governor: Active", en_note)
+
+        es_note = get_hardware_note("es")
+        self.assertIn("Detectado:", es_note)
+        self.assertIn("hilos", es_note)
+        self.assertIn("Gobernador adaptativo: Activo", es_note)
+
+    def test_adaptive_governor_gentle_mode_on_high_cpu(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=1)
+        with patch("psutil.cpu_percent", return_value=85.0), patch("time.sleep") as sleeper:
+            governor.govern()
+            self.assertEqual(governor.mode, "gentle")
+            self.assertGreater(governor.sleep_seconds, 0)
+            sleeper.assert_called_once_with(governor.sleep_seconds)
+
+    def test_adaptive_governor_burst_mode_on_low_cpu(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=1)
+        with patch("psutil.cpu_percent", return_value=25.0), patch("time.sleep") as sleeper:
+            governor.govern()
+            self.assertEqual(governor.mode, "burst")
+            self.assertEqual(governor.sleep_seconds, 0.0)
+            sleeper.assert_not_called()
+
+    def test_adaptive_governor_gc_periodic_collection(self):
+        from governor import AdaptiveGovernor
+        governor = AdaptiveGovernor(check_every=100, gc_every=5)
+        with patch("gc.collect") as gc_mock:
+            for _ in range(12):
+                governor.govern()
+            self.assertEqual(gc_mock.call_count, 2)
+
+
+class TakeoutConsolidatorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def test_is_takeout_partition(self):
+        from consolidator import is_takeout_partition
+        p1 = self.root / "Takeout Part 01"
+        p1.mkdir()
+        self.assertTrue(is_takeout_partition(p1))
+
+        p2 = self.root / "Random_Folder"
+        p2.mkdir()
+        self.assertFalse(is_takeout_partition(p2))
+        (p2 / "Google Photos").mkdir()
+        self.assertTrue(is_takeout_partition(p2))
+
+    def test_consolidate_multi_part_takeouts(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout Part 01" / "Google Photos" / "Photos from 2020"
+        part2 = self.root / "Takeout Part 02" / "Google Photos" / "Photos from 2020"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        img1 = part1 / "img1.jpg"
+        img1.write_bytes(b"content-1")
+        (part1 / "img1.jpg.json").write_text('{"title": "img1.jpg"}', encoding="utf-8")
+
+        img2 = part2 / "img2.jpg"
+        img2.write_bytes(b"content-2")
+        (part2 / "img2.jpg.json").write_text('{"title": "img2.jpg"}', encoding="utf-8")
+
+        target = consolidate_takeout_partitions(self.root)
+        self.assertEqual(target, self.root / "Takeout_Consolidated")
+
+        merged_album = target / "Photos from 2020"
+        self.assertTrue((merged_album / "img1.jpg").is_file())
+        self.assertTrue((merged_album / "img1.jpg.json").is_file())
+        self.assertTrue((merged_album / "img2.jpg").is_file())
+        self.assertTrue((merged_album / "img2.jpg.json").is_file())
+
+    def test_consolidate_identical_duplicate_skips(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout 1" / "Google Photos" / "Vacation"
+        part2 = self.root / "Takeout 2" / "Google Photos" / "Vacation"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        (part1 / "beach.jpg").write_bytes(b"identical image content")
+        (part2 / "beach.jpg").write_bytes(b"identical image content")
+
+        target = consolidate_takeout_partitions(self.root)
+        merged_album = target / "Vacation"
+        self.assertTrue((merged_album / "beach.jpg").is_file())
+        self.assertFalse((merged_album / "beach(1).jpg").exists())
+
+    def test_consolidate_content_collision_renames_media_and_couples_json(self):
+        from consolidator import consolidate_takeout_partitions
+
+        part1 = self.root / "Takeout 1" / "Google Photos" / "Vacation"
+        part2 = self.root / "Takeout 2" / "Google Photos" / "Vacation"
+        part1.mkdir(parents=True)
+        part2.mkdir(parents=True)
+
+        (part1 / "beach.jpg").write_bytes(b"image 1 content")
+        (part1 / "beach.jpg.json").write_text('{"title": "beach 1"}', encoding="utf-8")
+
+        (part2 / "beach.jpg").write_bytes(b"completely different image 2")
+        (part2 / "beach.jpg.json").write_text('{"title": "beach 2"}', encoding="utf-8")
+
+        target = consolidate_takeout_partitions(self.root)
+        merged_album = target / "Vacation"
+        self.assertTrue((merged_album / "beach.jpg").is_file())
+        self.assertTrue((merged_album / "beach.jpg.json").is_file())
+        self.assertTrue((merged_album / "beach(1).jpg").is_file())
+        self.assertTrue((merged_album / "beach(1).jpg.json").is_file())
+
+
+class Version32Tests(unittest.TestCase):
+    def test_app_version_is_3_2(self):
+        from window import APP_VERSION
+        self.assertEqual(APP_VERSION, "3.2")
+
+    def test_merge_takeouts_preference_validation(self):
+        from preferences import validate_preferences
+        prefs = validate_preferences({"merge_takeouts": True})
+        self.assertTrue(prefs["merge_takeouts"])
+
+
 if __name__ == "__main__":
     unittest.main()

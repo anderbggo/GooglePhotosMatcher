@@ -102,6 +102,8 @@ def validate_preferences(values):
         result["in_place"] = bool(values["in_place"])
     if "self_heal" in values:
         result["self_heal"] = bool(values["self_heal"])
+    if "merge_takeouts" in values:
+        result["merge_takeouts"] = bool(values["merge_takeouts"])
     return result
 
 

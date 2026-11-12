@@ -18,6 +18,7 @@ import PySimpleGUI as sg
 from PIL import Image
 
 from exiftool_runner import exiftool_batch, get_exiftool_path, resource_path, run_exiftool
+from governor import get_hardware_note
 from main import mainProcess
 from metadata import set_image_metadata
 from preferences import (
@@ -38,7 +39,7 @@ if sys.version_info >= (3, 14):
 PALETTE = LIGHT_PALETTE
 FONT = "Segoe UI" if platform.system() == "Windows" else "Helvetica"
 DISPLAY_FONT = "Bahnschrift" if platform.system() == "Windows" else "Avenir Next"
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 PROJECT_LINKS = {
     "About": "https://anderbggo.github.io/gpmatcher",
     "Support": "https://anderbggo.github.io/contribute",
@@ -397,6 +398,15 @@ def _apply_preferences(window, values, persist=False):
         window["-SELF_HEAL-"].set_tooltip(text(language, "self_heal_tip"))
     except (KeyError, TypeError):
         pass
+    try:
+        window["-MERGE_TAKEOUTS-"].update(value=values.get("merge_takeouts", False), text=text(language, "merge_takeouts"))
+        window["-MERGE_TAKEOUTS-"].set_tooltip(text(language, "merge_takeouts_tip"))
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-HARDWARE_NOTE-"].update(get_hardware_note(language))
+    except (KeyError, TypeError):
+        pass
     for key, options, selected in (("-THEME-", THEME_OPTIONS, values["theme"]), ("-LANGUAGE-", LANGUAGE_OPTIONS, values["language"])):
         labels = _choice_labels(language, options)
         window[key].update(values=labels, value=labels[options.index(selected)])
@@ -458,7 +468,8 @@ def build_window(preferences=None):
          sg.FolderBrowse(text(language, "browse"), key="-BROWSE_FOLDER-", target="-IN2-", size=(15, 1), button_color=(palette["text"], palette["panel_alt"]))],
         [
             sg.Checkbox(text(language, "in_place"), key="-IN_PLACE-", default=preferences.get("in_place", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "in_place_tip"), pad=((0, 16), (8, 0))),
-            sg.Checkbox(text(language, "self_heal"), key="-SELF_HEAL-", default=preferences.get("self_heal", True), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "self_heal_tip"), pad=((0, 0), (8, 0))),
+            sg.Checkbox(text(language, "self_heal"), key="-SELF_HEAL-", default=preferences.get("self_heal", True), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "self_heal_tip"), pad=((0, 16), (8, 0))),
+            sg.Checkbox(text(language, "merge_takeouts"), key="-MERGE_TAKEOUTS-", default=preferences.get("merge_takeouts", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "merge_takeouts_tip"), pad=((0, 0), (8, 0))),
         ],
     ], pad=(28, 12), background_color=palette["panel"])
     actions = panel([[
@@ -478,7 +489,8 @@ def build_window(preferences=None):
         counter_column(text(language, "unmatched"), "-UNMATCHED-", palette["warning"], palette),
     ]], pad=(28, 16), background_color=palette["input_bg"])
     status = panel([
-        [sg.Text(text(language, "activity"), key="-ACTIVITY_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 6)))],
+        [sg.Text(text(language, "activity"), key="-ACTIVITY_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 4)))],
+        [sg.Text(get_hardware_note(language), key="-HARDWARE_NOTE-", font=(FONT, 9), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (0, 6)))],
         [sg.Text(text(language, "ready"), key="-PROGRESS_LABEL-", size=(72, 2), expand_x=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["muted"], pad=((0, 0), (0, 6)))],
         [sg.ProgressBar(100, orientation="h", size=(48, 8), expand_x=True, border_width=0, bar_color=(palette["accent"], palette["panel_alt"]), key="-PROGRESS_BAR-", pad=((0, 0), (0, 12)))],
         [sg.Multiline(size=(74, 6), key="-LOG-", expand_x=True, expand_y=True, autoscroll=True, disabled=True, border_width=0, background_color=palette["input_bg"], text_color=palette["text"], font=("Consolas" if platform.system() == "Windows" else "Menlo", 10))],
@@ -604,6 +616,7 @@ def run_app():
             window.gpm_summary = summary
             in_place = bool(values.get("-IN_PLACE-", False))
             self_heal = bool(values.get("-SELF_HEAL-", True))
+            merge_takeouts = bool(values.get("-MERGE_TAKEOUTS-", False))
             results_folder = str(folder.resolve()) if in_place else str(folder.resolve() / "MatchedMedia")
             _set_busy(window, True)
             window["Report"].update(disabled=True)
@@ -617,7 +630,7 @@ def run_app():
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, **({"force": True} if event == "Force" else {})}, daemon=True)
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
         elif event == "-IN_PLACE-":
             preferences = dict(window.gpm_preferences)
@@ -630,6 +643,14 @@ def run_app():
         elif event == "-SELF_HEAL-":
             preferences = dict(window.gpm_preferences)
             preferences["self_heal"] = bool(values["-SELF_HEAL-"])
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError as error:
+                _append_log(window, text("en", "preferences_failed", detail=error))
+        elif event == "-MERGE_TAKEOUTS-":
+            preferences = dict(window.gpm_preferences)
+            preferences["merge_takeouts"] = bool(values["-MERGE_TAKEOUTS-"])
             window.gpm_preferences = preferences
             try:
                 save_preferences(preferences)
