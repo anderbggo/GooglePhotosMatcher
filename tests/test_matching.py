@@ -1182,6 +1182,62 @@ class ProcessingTests(unittest.TestCase):
         self.assertFalse((self.root / "MatchedMedia" / "photo.jpg").exists())
         self.assertTrue((self.root / "photo.jpg.json").is_file())
 
+    def test_in_place_restoration_preserves_subfolders_and_deletes_sidecars(self):
+        folder = self.root / "Photos from 2020"
+        folder.mkdir()
+        photo_path = folder / "photo.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo_path)
+        sidecar_path = folder / "photo.jpg.json"
+        sidecar_path.write_text(json.dumps({"title": "photo.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo_path.is_file())
+        self.assertFalse(sidecar_path.exists())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+        self.assertFalse((self.root / "EditedRaw").exists())
+        self.assertTrue(Path(summary["report"]).is_file())
+        self.assertEqual(Path(summary["report"]).parent, self.root)
+
+    def test_in_place_multipart_subdirectories_restore_in_place(self):
+        folder1 = self.root / "Takeout Part 01" / "Google Photos" / "Photos from 2020"
+        folder2 = self.root / "Takeout Part 02" / "Google Photos" / "Photos from 2021"
+        folder1.mkdir(parents=True)
+        folder2.mkdir(parents=True)
+
+        photo1 = folder1 / "photo1.jpg"
+        photo2 = folder2 / "photo2.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo1)
+        Image.new("RGB", (16, 16), "yellow").save(photo2)
+
+        (folder1 / "photo1.jpg.json").write_text(json.dumps({"title": "photo1.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        (folder2 / "photo2.jpg.json").write_text(json.dumps({"title": "photo2.jpg", "photoTakenTime": {"timestamp": "1000000001"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 2)
+        self.assertTrue(photo1.is_file())
+        self.assertTrue(photo2.is_file())
+        self.assertFalse((folder1 / "photo1.jpg.json").exists())
+        self.assertFalse((folder2 / "photo2.jpg.json").exists())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+
+    def test_in_place_edited_and_raw_remain_in_place(self):
+        folder = self.root / "Photos from 2020"
+        folder.mkdir()
+        edited = folder / "photo-edited.jpg"
+        raw = folder / "photo.jpg"
+        Image.new("RGB", (16, 16), "red").save(edited)
+        Image.new("RGB", (16, 16), "red").save(raw)
+        (folder / "photo.jpg.json").write_text(json.dumps({"title": "photo.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(edited.is_file())
+        self.assertTrue(raw.is_file())
+        self.assertFalse((self.root / "MatchedMedia").exists())
+        self.assertFalse((self.root / "EditedRaw").exists())
+        self.assertFalse((folder / "photo.jpg.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

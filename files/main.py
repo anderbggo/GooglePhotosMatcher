@@ -322,23 +322,33 @@ def _write_metadata_once(path, metadata, exiftool_path, preserve_identifier=Fals
     return setWindowsTime(str(path), metadata["timestamp"])
 
 
-def _restore(task, root, exiftool_path, force=False):
-    subfolder = (FORCED_FOLDER,) if force else ()
-    output = root.joinpath(task.get("output_folder", "MatchedMedia"), *subfolder)
-    items = [(task["source"], output / task["source"].name)]
-    if task["companion"] is not None:
-        items.append((task["companion"], output / task["companion"].name))
-    if task["raw"] is not None:
-        items.append((task["raw"], root.joinpath("EditedRaw", *subfolder, task["raw"].name)))
-    items = list(zip([source for source, _ in items], _free_names([destination for _, destination in items])))
-    for source, destination in items:
-        _safe_parent(destination, root)
-        if destination.exists():
-            raise FileExistsError(f"Output already exists; nothing overwritten: {destination.relative_to(root)}")
-        if not source.is_file() or source.is_symlink():
-            raise FileNotFoundError(f"Original media is missing or unsafe: {source.name}")
-        if source.stat().st_dev != destination.parent.stat().st_dev:
-            raise OSError("Output folders must be on the same filesystem; media will not be copied")
+def _restore(task, root, exiftool_path, force=False, in_place=False):
+    if in_place:
+        items = [(task["source"], task["source"])]
+        if task["companion"] is not None:
+            items.append((task["companion"], task["companion"]))
+        if task["raw"] is not None:
+            items.append((task["raw"], task["raw"]))
+        for source, _ in items:
+            if not source.is_file() or source.is_symlink():
+                raise FileNotFoundError(f"Original media is missing or unsafe: {source.name}")
+    else:
+        subfolder = (FORCED_FOLDER,) if force else ()
+        output = root.joinpath(task.get("output_folder", "MatchedMedia"), *subfolder)
+        items = [(task["source"], output / task["source"].name)]
+        if task["companion"] is not None:
+            items.append((task["companion"], output / task["companion"].name))
+        if task["raw"] is not None:
+            items.append((task["raw"], root.joinpath("EditedRaw", *subfolder, task["raw"].name)))
+        items = list(zip([source for source, _ in items], _free_names([destination for _, destination in items])))
+        for source, destination in items:
+            _safe_parent(destination, root)
+            if destination.exists():
+                raise FileExistsError(f"Output already exists; nothing overwritten: {destination.relative_to(root)}")
+            if not source.is_file() or source.is_symlink():
+                raise FileNotFoundError(f"Original media is missing or unsafe: {source.name}")
+            if source.stat().st_dev != destination.parent.stat().st_dev:
+                raise OSError("Output folders must be on the same filesystem; media will not be copied")
     sidecars = [(path, path.read_bytes(), path.stat()) for path in task.get("json_paths", [task["json_path"]])]
     moved = []
     deleted = []
@@ -354,9 +364,10 @@ def _restore(task, root, exiftool_path, force=False):
                 raise RuntimeError("Live Photo identifier changed during metadata writing; media left in original folder")
             if warning:
                 warnings.append(warning)
-        for source, destination in items:
-            _move_no_replace(source, destination)
-            moved.append((source, destination))
+        if not in_place:
+            for source, destination in items:
+                _move_no_replace(source, destination)
+                moved.append((source, destination))
         for sidecar in sidecars:
             sidecar[0].unlink()
             deleted.append(sidecar)
@@ -380,8 +391,8 @@ def _restore(task, root, exiftool_path, force=False):
         raise
 
 
-def _report(root, records):
-    folder = root / "MatchedMedia"
+def _report(root, records, in_place=False):
+    folder = root if in_place else root / "MatchedMedia"
     _safe_parent(folder / "matching-report.csv", root)
     descriptor, filename = tempfile.mkstemp(prefix="matching-report-", suffix=".csv", dir=folder)
     with os.fdopen(descriptor, "w", encoding="utf-8-sig", newline="") as stream:
@@ -396,7 +407,7 @@ def _report(root, records):
     return filename
 
 
-def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False):
     try:
         root = Path(browserPath).expanduser().resolve(strict=True)
         if not root.is_dir() or root.name in {"MatchedMedia", "EditedRaw"}:
@@ -438,7 +449,7 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
                         if dry_run:
                             task["status"] = "preview"
                         else:
-                            created, warnings = _restore(task, root, exiftoolPath, force) if force else _restore(task, root, exiftoolPath)
+                            created, warnings = _restore(task, root, exiftoolPath, force, in_place)
                             task["status"] = "restored" if created else "already_restored"
                             task["details"] = "; ".join(filter(None, (task["details"], *warnings)))
                     except Exception as error:
@@ -458,7 +469,7 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
             for name in sorted(matcher.names):
                 if folder / name not in covered:
                     records.append({"json": "", "media": str((folder / name).relative_to(root)), "status": "unmatched", "rule": "", "details": "No confirmed metadata match; original left untouched"})
-        report_path = _report(root, records)
+        report_path = _report(root, records, in_place=in_place)
         summary = dict(Counter(record["status"] for record in records))
         summary.update(report=report_path, dry_run=dry_run, cancelled=cancel_event is not None and cancel_event.is_set())
         log(window, f"Report: {report_path}")

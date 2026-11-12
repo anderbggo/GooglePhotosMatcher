@@ -94,7 +94,13 @@ def preference_path():
 def validate_preferences(values):
     if not isinstance(values, dict):
         values = {}
-    return {"theme": values.get("theme") if values.get("theme") in THEME_OPTIONS else "system", "language": values.get("language") if values.get("language") in LANGUAGE_OPTIONS else "system"}
+    result = {
+        "theme": values.get("theme") if values.get("theme") in THEME_OPTIONS else "system",
+        "language": values.get("language") if values.get("language") in LANGUAGE_OPTIONS else "system",
+    }
+    if "in_place" in values:
+        result["in_place"] = bool(values["in_place"])
+    return result
 
 
 def load_preferences(path=None):
