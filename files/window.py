@@ -3,6 +3,7 @@ import io
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -590,6 +591,57 @@ def _confirm_backup(window, folder, prefix="backup"):
         dialog.close()
 
 
+def _build_multipart_dialog(window, root_parent: Path, partitions: list[Path]):
+    palette = _window_palette(window)
+    language = _window_language(window)
+    parts_summary = "\n".join(f"  \u2022 {p.name}" for p in partitions[:8])
+    if len(partitions) > 8:
+        parts_summary += f"\n  ... and {len(partitions) - 8} more parts"
+
+    default_name = "Takeout_Consolidated"
+
+    layout = [
+        [sg.Text(text(language, "multipart_dialog_title"), font=(DISPLAY_FONT, 16, "bold"), text_color=palette["accent"], background_color=palette["panel"], pad=((0, 0), (0, 10)))],
+        [sg.Text(text(language, "multipart_dialog_desc"), size=(68, None), font=(FONT, 10), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 10)))],
+        [sg.Text(text(language, "multipart_detected_parts_header", count=len(partitions)), font=(FONT, 9, "bold"), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (2, 2)))],
+        [sg.Multiline(parts_summary, size=(66, min(5, max(3, len(partitions)))), disabled=True, no_scrollbar=len(partitions) <= 5, font=("Consolas" if platform.system() == "Windows" else "Courier", 9), background_color=palette["panel_alt"], text_color=palette["text"], border_width=0, pad=((0, 0), (0, 12)))],
+        [sg.Text(text(language, "multipart_folder_name_label"), font=(FONT, 10, "bold"), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 4)))],
+        [sg.Input(default_name, key="-DEST_NAME-", size=(46, 1), font=(FONT, 10), text_color=palette["text"], background_color=palette["input_bg"], border_width=0, pad=((0, 0), (0, 4)))],
+        [sg.Text(text(language, "multipart_parent_hint", parent=str(root_parent)), font=(FONT, 8), text_color=palette["muted"], background_color=palette["panel"], pad=((0, 0), (0, 12)))],
+        [sg.Checkbox(text(language, "multipart_consolidate_now"), default=True, key="-NOW-", font=(FONT, 9), text_color=palette["text"], background_color=palette["panel"], pad=((0, 0), (0, 14)))],
+        [sg.Push(background_color=palette["panel"]),
+         sg.Button(text(language, "multipart_skip"), key="Skip", size=(14, 1), button_color=(palette["text"], palette["panel_alt"]), pad=((0, 12), (0, 0))),
+         sg.Button(text(language, "multipart_confirm"), key="Confirm", size=(22, 1), bind_return_key=True, button_color=(palette["on_accent"], palette["accent"]))],
+    ]
+    dialog = sg.Window(text(language, "multipart_dialog_title"), layout, modal=True, finalize=True, background_color=palette["panel"], margins=(24, 20), keep_on_top=True)
+    dialog.gpm_palette = palette
+    _install_button_feedback(dialog, ("Confirm", "Skip"))
+    dialog.bind("<Escape>", "Skip")
+    try:
+        dialog["-DEST_NAME-"].Widget.configure(relief="flat", highlightthickness=1, highlightbackground=palette["line"], highlightcolor=palette["accent"], insertbackground=palette["text"], background=palette["input_bg"], foreground=palette["text"])
+        dialog["-DEST_NAME-"].Widget.focus_set()
+        dialog["-DEST_NAME-"].Widget.select_range(0, "end")
+    except Exception:
+        pass
+    return dialog
+
+
+def _prompt_multipart_dialog(window, root_parent: Path, partitions: list[Path]):
+    dialog = _build_multipart_dialog(window, root_parent, partitions)
+    try:
+        event, values = dialog.read()
+        if event == "Confirm":
+            dest_name = values.get("-DEST_NAME-", "").strip()
+            dest_name = re.sub(r'[<>:"/\\|?*]', '_', dest_name)
+            if not dest_name:
+                dest_name = "Takeout_Consolidated"
+            consolidate_now = bool(values.get("-NOW-", True))
+            return True, dest_name, consolidate_now
+        return False, "", False
+    finally:
+        dialog.close()
+
+
 def run_app():
     window = build_window()
     cancel_event = threading.Event()
@@ -642,7 +694,7 @@ def run_app():
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, "concurrency": "Auto", **({"force": True} if event == "Force" else {})}, daemon=True)
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, "concurrency": "Auto", "custom_consolidated_name": getattr(window, "gpm_custom_consolidated_name", None), **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
         elif event == "-IN2-":
             folder_str = values.get("-IN2-", "").strip()
@@ -650,15 +702,101 @@ def run_app():
                 try:
                     from governor import get_dynamic_folder_note
                     from journal import detect_prior_progress
+                    from consolidator import detect_multipart_takeout
                     folder_obj = Path(f_path).resolve()
                     if folder_obj.is_dir():
                         note = get_dynamic_folder_note(f_path, language=lang)
                         audit = detect_prior_progress(folder_obj)
                         window.write_event_value("-AUTO_DETECT_RESULT-", (note, audit))
+                        root_parent, partitions = detect_multipart_takeout(folder_obj)
+                        if len(partitions) > 1:
+                            window.write_event_value("-PROMPT_MULTIPART-", (str(root_parent), [str(p) for p in partitions]))
                 except Exception:
                     pass
 
             threading.Thread(target=_async_scan_and_detect, args=(folder_str, _window_language(window)), daemon=True).start()
+        elif event == "-PROMPT_MULTIPART-":
+            root_parent_str, parts_list = values[event]
+            prompted = getattr(window, "gpm_prompted_multiparts", None)
+            if prompted is None:
+                prompted = set()
+                window.gpm_prompted_multiparts = prompted
+            if root_parent_str not in prompted:
+                prompted.add(root_parent_str)
+                current_in2 = values.get("-IN2-", "").strip()
+                if current_in2:
+                    try:
+                        prompted.add(str(Path(current_in2).resolve()))
+                    except Exception:
+                        pass
+
+                parent_path = Path(root_parent_str)
+                parts_paths = [Path(p) for p in parts_list]
+                confirmed, dest_name, consolidate_now = _prompt_multipart_dialog(window, parent_path, parts_paths)
+                lang = _window_language(window)
+                if confirmed:
+                    window.gpm_custom_consolidated_name = dest_name
+                    window["-MERGE_TAKEOUTS-"].update(True)
+                    preferences = dict(window.gpm_preferences)
+                    preferences["merge_takeouts"] = True
+                    window.gpm_preferences = preferences
+                    try:
+                        save_preferences(preferences)
+                    except OSError:
+                        pass
+
+                    if consolidate_now:
+                        _set_busy(window, True)
+                        _set_status(window, message=text(lang, "multipart_merging_status", count=len(parts_paths), dest=dest_name), color="accent")
+                        _append_log(window, f"Consolidating {len(parts_paths)} Takeout partitions into '{dest_name}'...")
+
+                        def _do_consolidation(p_root, d_name):
+                            try:
+                                from consolidator import consolidate_takeout_partitions
+                                new_root = consolidate_takeout_partitions(p_root, window, cancel_event, dest_folder_name=d_name)
+                                window.write_event_value("-CONSOLIDATION_DONE-", str(new_root))
+                            except Exception as err:
+                                window.write_event_value("-CONSOLIDATION_ERROR-", str(err))
+
+                        threading.Thread(target=_do_consolidation, args=(parent_path, dest_name), daemon=True).start()
+                    else:
+                        _append_log(window, f"Multi-part merge enabled: will consolidate {len(parts_paths)} parts into '{dest_name}' when Match is clicked.")
+                else:
+                    window["-MERGE_TAKEOUTS-"].update(False)
+                    preferences = dict(window.gpm_preferences)
+                    preferences["merge_takeouts"] = False
+                    window.gpm_preferences = preferences
+                    try:
+                        save_preferences(preferences)
+                    except OSError:
+                        pass
+                    _append_log(window, text(lang, "multipart_skipped_log"))
+        elif event == "-CONSOLIDATION_DONE-":
+            new_root_str = values[event]
+            _set_busy(window, False)
+            window["-IN2-"].update(new_root_str)
+            lang = _window_language(window)
+            _set_status(window, key="ready", color="success")
+            _append_log(window, text(lang, "multipart_done_log", dest=Path(new_root_str).name))
+
+            def _rescan(f_path, l):
+                try:
+                    from governor import get_dynamic_folder_note
+                    from journal import detect_prior_progress
+                    folder_obj = Path(f_path).resolve()
+                    if folder_obj.is_dir():
+                        note = get_dynamic_folder_note(f_path, language=l)
+                        audit = detect_prior_progress(folder_obj)
+                        window.write_event_value("-AUTO_DETECT_RESULT-", (note, audit))
+                except Exception:
+                    pass
+
+            threading.Thread(target=_rescan, args=(new_root_str, lang), daemon=True).start()
+        elif event == "-CONSOLIDATION_ERROR-":
+            err_msg = values[event]
+            _set_busy(window, False)
+            _set_status(window, message=f"Consolidation error: {err_msg}", color="danger")
+            _append_log(window, f"ERROR: Multi-part consolidation failed: {err_msg}")
         elif event == "-AUTO_DETECT_RESULT-":
             note, audit = values[event]
             try:

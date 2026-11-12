@@ -1709,6 +1709,51 @@ class Version33EnterpriseFeaturesTests(unittest.TestCase):
         # Check that matching-journal.csv was written in real-time
         self.assertTrue((self.root / "MatchedMedia" / "matching-journal.csv").is_file())
 
+    def test_detect_multipart_takeout_direct(self):
+        from consolidator import detect_multipart_takeout
+        p1 = self.root / "Takeout Part 01" / "Google Photos"
+        p2 = self.root / "Takeout Part 02" / "Google Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        root_parent, partitions = detect_multipart_takeout(self.root)
+        self.assertEqual(root_parent.resolve(), self.root.resolve())
+        self.assertEqual(len(partitions), 2)
+
+    def test_detect_multipart_takeout_from_child_part(self):
+        from consolidator import detect_multipart_takeout
+        p1 = self.root / "Takeout Part 01" / "Google Photos"
+        p2 = self.root / "Takeout Part 02" / "Google Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        # Select p1 directly instead of parent
+        root_parent, partitions = detect_multipart_takeout(self.root / "Takeout Part 01")
+        self.assertEqual(root_parent.resolve(), self.root.resolve())
+        self.assertEqual(len(partitions), 2)
+
+    def test_consolidate_custom_dest_folder_name(self):
+        from consolidator import consolidate_takeout_partitions
+        p1 = self.root / "takeout-001" / "Photos"
+        p2 = self.root / "takeout-002" / "Photos"
+        p1.mkdir(parents=True)
+        p2.mkdir(parents=True)
+        (p1 / "pic1.jpg").write_bytes(b"111")
+        (p2 / "pic2.jpg").write_bytes(b"222")
+        dest = consolidate_takeout_partitions(self.root, dest_folder_name="Custom_Merged_Archive")
+        self.assertEqual(dest.name, "Custom_Merged_Archive")
+        self.assertTrue((dest / "pic1.jpg").is_file())
+        self.assertTrue((dest / "pic2.jpg").is_file())
+        self.assertTrue((dest / ".gpm_consolidated").is_file())
+
+    def test_multipart_dialog_and_translations(self):
+        from translations import text
+        for lang in ("en", "es"):
+            self.assertTrue(text(lang, "multipart_dialog_title"))
+            self.assertTrue(text(lang, "multipart_dialog_desc"))
+            self.assertIn("4", text(lang, "multipart_detected_parts_header", count=4))
+            self.assertTrue(text(lang, "multipart_folder_name_label"))
+            self.assertTrue(text(lang, "multipart_confirm"))
+            self.assertTrue(text(lang, "multipart_skip"))
+
 
 if __name__ == "__main__":
     unittest.main()

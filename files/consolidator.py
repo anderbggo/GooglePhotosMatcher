@@ -24,7 +24,11 @@ def is_takeout_partition(directory: Path) -> bool:
     """Return True if directory represents a Google Takeout partition."""
     if not directory.is_dir():
         return False
+    if (directory / ".gpm_consolidated").exists():
+        return False
     name = directory.name.lower()
+    if name.endswith(("_consolidated", "_merged")):
+        return False
     for pattern in TAKEOUT_DIR_PATTERNS:
         if pattern.match(name):
             return True
@@ -47,11 +51,35 @@ def find_takeout_partitions(root_folder: Path) -> list[Path]:
         return []
 
     for entry in entries:
-        if entry.is_dir() and not entry.name.startswith((".", "MatchedMedia", "EditedRaw", "Takeout_Consolidated")):
+        if entry.is_dir() and not entry.name.startswith((".", "MatchedMedia", "EditedRaw")):
             if is_takeout_partition(entry):
                 partitions.append(entry)
 
     return partitions
+
+
+def detect_multipart_takeout(folder: Path) -> tuple[Path, list[Path]]:
+    """Detect if folder contains multiple Takeout partitions, or is itself a partition in a multi-part set.
+
+    Returns (root_parent, partitions_list).
+    """
+    root = Path(folder).resolve()
+    if not root.is_dir():
+        return root, []
+
+    # Check 1: root directory directly contains multiple partitions
+    direct = find_takeout_partitions(root)
+    if len(direct) > 1:
+        return root, direct
+
+    # Check 2: root directory is itself one of several sibling partitions under its parent
+    parent = root.parent
+    if parent.is_dir() and parent != root:
+        siblings = find_takeout_partitions(parent)
+        if len(siblings) > 1 and any(s.resolve() == root for s in siblings):
+            return parent, siblings
+
+    return root, []
 
 
 def get_partition_base(partition: Path) -> Path:
@@ -110,7 +138,7 @@ def _get_unique_target_path(target: Path) -> Path:
         counter += 1
 
 
-def consolidate_takeout_partitions(root_folder: Path, window=None, cancel_event=None) -> Path:
+def consolidate_takeout_partitions(root_folder: Path, window=None, cancel_event=None, dest_folder_name="Takeout_Consolidated") -> Path:
     """Consolidate multiple Takeout partitions into a single unified directory structure.
 
     Combines split albums (e.g. 'Photos from 2020' split across Part 01 and Part 02),
@@ -130,8 +158,13 @@ def consolidate_takeout_partitions(root_folder: Path, window=None, cancel_event=
             except Exception:
                 pass
 
-    dest_dir = root / "Takeout_Consolidated"
+    dest_dir_name = dest_folder_name.strip() if dest_folder_name and dest_folder_name.strip() else "Takeout_Consolidated"
+    dest_dir = root / dest_dir_name
     dest_dir.mkdir(exist_ok=True)
+    try:
+        (dest_dir / ".gpm_consolidated").touch(exist_ok=True)
+    except OSError:
+        pass
 
     log(f"Takeout consolidation started: merging {len(partitions)} parts into {dest_dir.name}")
 

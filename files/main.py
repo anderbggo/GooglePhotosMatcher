@@ -592,14 +592,15 @@ def _report(root, records, in_place=False):
     return filename
 
 
-def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False, merge_takeouts=False, concurrency=None):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False, merge_takeouts=False, concurrency=None, custom_consolidated_name=None):
     try:
         root = Path(browserPath).expanduser().resolve(strict=True)
         if not root.is_dir() or root.name in {"MatchedMedia", "EditedRaw"}:
             raise ValueError("Select the original Takeout folder, not an output folder")
         if merge_takeouts:
             from consolidator import consolidate_takeout_partitions
-            root = consolidate_takeout_partitions(root, window, cancel_event)
+            dest_name = custom_consolidated_name or getattr(window, "gpm_custom_consolidated_name", "Takeout_Consolidated") if window else "Takeout_Consolidated"
+            root = consolidate_takeout_partitions(root, window, cancel_event, dest_folder_name=dest_name)
         tasks, matchers = _plan(root, editedW.strip(), window, cancel_event, force, self_heal)
         if force:
             for task in tasks:
