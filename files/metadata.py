@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -15,6 +16,42 @@ if platform.system() == "Windows":
     from win32_setctime import setctime
 else:
     setctime = None
+
+
+def parse_filename_timestamp(filename):
+    """Extract a Unix timestamp from standard camera and smartphone filename patterns."""
+    if not filename:
+        return None
+    patterns = [
+        r"(?:IMG|PXL|VID|SAM|WP|AUD|Screenshot|ScreenShot|Snapchat)[_-](\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})",
+        r"(\d{4})[-_](\d{2})[-_](\d{2})[ _-](\d{2})[.:_-](\d{2})[.:_-](\d{2})",
+        r"(?<!\d)(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?!\d)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, filename, re.IGNORECASE)
+        if match:
+            y, m, d, h, mn, s = map(int, match.groups())
+            if 1970 <= y <= 2040 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= h <= 23 and 0 <= mn <= 59 and 0 <= s <= 59:
+                try:
+                    dt = datetime(y, m, d, h, mn, s).astimezone()
+                    return int(dt.timestamp())
+                except (ValueError, OverflowError):
+                    continue
+    date_patterns = [
+        r"(?:IMG|PXL|VID)[_-](\d{4})(\d{2})(\d{2})",
+        r"(?<!\d)(\d{4})[-_](\d{2})[-_](\d{2})(?!\d)",
+    ]
+    for pattern in date_patterns:
+        match = re.search(pattern, filename, re.IGNORECASE)
+        if match:
+            y, m, d = map(int, match.groups())
+            if 1970 <= y <= 2040 and 1 <= m <= 12 and 1 <= d <= 31:
+                try:
+                    dt = datetime(y, m, d, 12, 0, 0).astimezone()
+                    return int(dt.timestamp())
+                except (ValueError, OverflowError):
+                    continue
+    return None
 
 
 def setWindowsTime(filepath, timeStamp):

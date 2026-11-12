@@ -100,6 +100,8 @@ def validate_preferences(values):
     }
     if "in_place" in values:
         result["in_place"] = bool(values["in_place"])
+    if "self_heal" in values:
+        result["self_heal"] = bool(values["self_heal"])
     return result
 
 

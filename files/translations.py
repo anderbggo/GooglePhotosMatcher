@@ -8,6 +8,8 @@ TEXT = {
         "unmatched": "Unmatched", "activity": "Activity", "ready": "Ready", "scanning": "Scanning...",
         "in_place": "Keep files in original folders (in-place)",
         "in_place_tip": "Preserve folder structure and restore media where it is without creating MatchedMedia",
+        "self_heal": "Self-heal metadata (recommended)",
+        "self_heal_tip": "Auto-repair corrupted EXIF, synthesize timestamps from filenames, fix invalid GPS, and synchronize Live Photos",
         "finishing": "Finishing current file...", "invalid_folder": "Invalid Takeout folder",
         "cancelled": "Cancelled", "preview_done": "Preview complete", "done": "Restoration complete",
         "results": "Open results", "report": "Open report", "about": "\u24d8  About", "support": "\u2661  Support me",
@@ -29,6 +31,8 @@ TEXT = {
         "unmatched": "Sin pareja", "activity": "Actividad", "ready": "Listo", "scanning": "Analizando...",
         "in_place": "Conservar en carpetas originales (in situ)",
         "in_place_tip": "Conservar la estructura de carpetas y restaurar los archivos en su lugar sin crear MatchedMedia",
+        "self_heal": "Autocorrección de metadatos (recomendado)",
+        "self_heal_tip": "Reparar EXIF dañado, obtener fechas del nombre de archivo, corregir GPS inválido y sincronizar Live Photos",
         "finishing": "Finalizando archivo actual...", "invalid_folder": "Carpeta de Takeout no v\u00e1lida",
         "cancelled": "Cancelado", "preview_done": "Vista previa completada", "done": "Restauraci\u00f3n completada",
         "results": "Abrir resultados", "report": "Abrir informe", "about": "\u24d8  Acerca de", "support": "\u2661  Apoyarme",
@@ -70,6 +74,7 @@ SPANISH_PREFIXES = {
     "Could not open browser: ": "No se pudo abrir el navegador: ",
     "Could not save preferences: ": "No se pudieron guardar las preferencias: ",
     "Force match failed: ": "Forzado fallido: ", "Force match: ": "Forzado: ",
+    "Self-healed: ": "Autorreparado: ", "Self-healing failed: ": "Autorreparación fallida: ",
 }
 SPANISH_LOG_STATUS = {"RESTORED": "RESTAURADO", "ALREADY_RESTORED": "YA RESTAURADO", "PREVIEW": "VISTA PREVIA", "ERROR": "ERROR", "SKIPPED": "OMITIDO", "CANCELLED": "CANCELADO", "UNMATCHED": "SIN PAREJA", "Report": "Informe"}
 

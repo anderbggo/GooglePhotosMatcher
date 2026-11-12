@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import tempfile
+import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,15 @@ from matching import (
     same_media_type,
     sidecar_media_name,
 )
-from metadata import get_content_identifier, set_image_metadata, set_photo_metadata, set_video_metadata, setWindowsTime
+from metadata import (
+    get_content_identifier,
+    parse_filename_timestamp,
+    set_content_identifier,
+    set_image_metadata,
+    set_photo_metadata,
+    set_video_metadata,
+    setWindowsTime,
+)
 
 FORCED_FOLDER = "ForcedMatches"
 
@@ -37,17 +46,18 @@ def log(window, msg):
     print(msg)
 
 
-def _metadata(data, lenient=False):
-    timestamp = None
-    for key in ("photoTakenTime", "photoLastModifiedTime"):
-        value = data.get(key)
-        if isinstance(value, dict) and value.get("timestamp") is not None:
-            raw_timestamp = value["timestamp"]
-            if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, (str, int)):
-                raise ValueError("Invalid photo timestamp")
-            timestamp = int(raw_timestamp)
-            datetime.fromtimestamp(timestamp)
-            break
+def _metadata(data, lenient=False, synthesized_timestamp=None):
+    timestamp = synthesized_timestamp
+    if timestamp is None:
+        for key in ("photoTakenTime", "photoLastModifiedTime"):
+            value = data.get(key)
+            if isinstance(value, dict) and value.get("timestamp") is not None:
+                raw_timestamp = value["timestamp"]
+                if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, (str, int)):
+                    raise ValueError("Invalid photo timestamp")
+                timestamp = int(raw_timestamp)
+                datetime.fromtimestamp(timestamp)
+                break
     if timestamp is None:
         raise ValueError("Missing photo timestamp")
     coordinates = (0.0, 0.0, 0.0)
@@ -80,7 +90,7 @@ def _scan_error(error):
     raise error
 
 
-def _plan(root, edited_word, window, cancel_event, force=False):
+def _plan(root, edited_word, window, cancel_event, force=False, self_heal=False):
     tasks = []
     matchers = {}
     for directory, subdirectories, filenames in os.walk(root, onerror=_scan_error, followlinks=False):
@@ -115,10 +125,30 @@ def _plan(root, edited_word, window, cancel_event, force=False):
                 try:
                     task["metadata"] = _metadata(data)
                 except (ValueError, TypeError, OverflowError) as error:
-                    if not force:
+                    synthesized = parse_filename_timestamp(title) or parse_filename_timestamp(json_name) if self_heal else None
+                    if synthesized is not None:
+                        try:
+                            task["metadata"] = _metadata(data, lenient=True, synthesized_timestamp=synthesized)
+                            task["details"] = "Self-healed: restored timestamp from filename"
+                        except Exception:
+                            if not force:
+                                raise
+                            task["metadata"] = _metadata(data, lenient=True)
+                            task["details"] = f"Force match: discarded invalid metadata ({error})"
+                    elif self_heal:
+                        try:
+                            task["metadata"] = _metadata(data, lenient=True)
+                            task["details"] = f"Self-healed: discarded invalid metadata ({error})"
+                        except Exception:
+                            if not force:
+                                raise
+                            task["metadata"] = _metadata(data, lenient=True)
+                            task["details"] = f"Force match: discarded invalid metadata ({error})"
+                    elif not force:
                         raise
-                    task["metadata"] = _metadata(data, lenient=True)
-                    task["details"] = f"Force match: discarded invalid metadata ({error})"
+                    else:
+                        task["metadata"] = _metadata(data, lenient=True)
+                        task["details"] = f"Force match: discarded invalid metadata ({error})"
                 edited, original = matcher.match(title, json_name, edited_word)
                 original_with_separate_edit = False
                 if edited and sidecar_owners.get(normalized_name(edited), set()) - {json_name}:
@@ -136,6 +166,7 @@ def _plan(root, edited_word, window, cancel_event, force=False):
             except (OSError, ValueError, TypeError, OverflowError) as error:
                 task.update(status="error", details=str(error), match_failed=isinstance(error, AmbiguousMatchError))
 
+    _resolve_cross_folder_matches(tasks, matchers, root)
     if force:
         _force_sources(tasks, matchers, root)
     claims = defaultdict(list)
@@ -153,6 +184,65 @@ def _plan(root, edited_word, window, cancel_event, force=False):
             for owner in owners:
                 owner.update(status="error", details=f"Conflicting JSON sidecars for {source.name}")
     return tasks, matchers
+
+
+def _resolve_cross_folder_matches(tasks, matchers, root):
+    """Resolves multi-part Takeout archive splits and album-vs-year partitions across folders."""
+    claimed = {path for task in tasks for path in (task["source"], task["raw"]) if path is not None}
+    unclaimed = {}
+    for folder, matcher in matchers.items():
+        for name in sorted(matcher.names):
+            media_path = folder / name
+            if media_path not in claimed:
+                unclaimed[media_path] = folder
+    for task in tasks:
+        if not task.get("match_failed"):
+            continue
+        json_path = task["json_path"]
+        title = task.get("title", "")
+        names = {sidecar_media_name(json_path.name)[0], title}
+        stems = {normalized_name(os.path.splitext(n)[0]) for n in names if n}
+
+        # Strategy A: Subpath Sibling Match (Multi-Part Archive Splits)
+        folder_name = json_path.parent.name.casefold()
+        subpath_candidates = [
+            media_path for media_path in unclaimed
+            if media_path not in claimed
+            and media_path.parent != json_path.parent
+            and media_path.parent.name.casefold() == folder_name
+            and (media_path.name in names or normalized_name(media_path.stem) in stems)
+        ]
+        if len(subpath_candidates) == 1:
+            source = subpath_candidates[0]
+            claimed.add(source)
+            task.update(
+                status="pending", source=source, media=str(source.relative_to(root)),
+                rule="cross-part subpath match", match_failed=False,
+                details="; ".join(filter(None, (task["details"], f"Resolved across parts from {source.parent.name}"))),
+            )
+            continue
+
+        # Strategy B: Global Unique Stem Match (Album vs Year Folders)
+        title_ext = os.path.splitext(title)[1].casefold()
+        stem_candidates = [
+            media_path for media_path in unclaimed
+            if media_path not in claimed
+            and media_path.parent != json_path.parent
+            and normalized_name(media_path.stem) in stems
+            and (
+                media_path.suffix.casefold() == title_ext
+                or (title_ext in IMAGE_EXTENSIONS and media_path.suffix.casefold() in IMAGE_EXTENSIONS)
+                or (title_ext in VIDEO_EXTENSIONS and media_path.suffix.casefold() in VIDEO_EXTENSIONS)
+            )
+        ]
+        if len(stem_candidates) == 1:
+            source = stem_candidates[0]
+            claimed.add(source)
+            task.update(
+                status="pending", source=source, media=str(source.relative_to(root)),
+                rule="cross-folder stem match", match_failed=False,
+                details="; ".join(filter(None, (task["details"], f"Resolved from {source.parent.name}"))),
+            )
 
 
 def _force_sources(tasks, matchers, root):
@@ -221,7 +311,7 @@ def _give_up(task):
     task.update(status="unmatched", details=details, force_failed=True)
 
 
-def _confirmed_companion(task, matcher, claimed_sources, exiftool_path):
+def _confirmed_companion(task, matcher, claimed_sources, exiftool_path, self_heal=False):
     source = task["source"]
     if source.suffix.casefold() not in IMAGE_EXTENSIONS:
         return None
@@ -232,14 +322,45 @@ def _confirmed_companion(task, matcher, claimed_sources, exiftool_path):
     if len(candidates) > 1:
         task["details"] = "Multiple companion videos; automatic pairing skipped"
         return None
+    companion = candidates[0]
     try:
         image_identifier = get_content_identifier(str(source), exiftool_path)
+        video_identifier = get_content_identifier(str(companion), exiftool_path)
+        if image_identifier and image_identifier == video_identifier:
+            task["identifier"] = image_identifier
+            return companion
+        if self_heal:
+            if not image_identifier and not video_identifier:
+                new_id = str(uuid.uuid4()).upper()
+                try:
+                    set_content_identifier(str(companion), new_id, exiftool_path)
+                    try:
+                        set_content_identifier(str(source), new_id, exiftool_path)
+                    except Exception:
+                        pass
+                    task["identifier"] = new_id
+                    task["details"] = "; ".join(filter(None, (task["details"], "Self-healed: generated Live Photo identifier")))
+                    return companion
+                except Exception:
+                    pass
+            elif image_identifier and not video_identifier:
+                try:
+                    set_content_identifier(str(companion), image_identifier, exiftool_path)
+                    task["identifier"] = image_identifier
+                    task["details"] = "; ".join(filter(None, (task["details"], "Self-healed: synchronized Live Photo identifier to video")))
+                    return companion
+                except Exception:
+                    pass
+            elif not image_identifier and video_identifier:
+                try:
+                    set_content_identifier(str(source), video_identifier, exiftool_path)
+                    task["identifier"] = video_identifier
+                    task["details"] = "; ".join(filter(None, (task["details"], "Self-healed: synchronized Live Photo identifier to image")))
+                    return companion
+                except Exception:
+                    pass
         if not image_identifier:
             return None
-        video_identifier = get_content_identifier(str(candidates[0]), exiftool_path)
-        if image_identifier == video_identifier:
-            task["identifier"] = image_identifier
-            return candidates[0]
         task["details"] = "Live Photo identifiers are missing or different; video left untouched"
     except (OSError, ValueError, RuntimeError) as error:
         task["details"] = f"Live Photo check skipped: {error}"
@@ -271,16 +392,16 @@ def _move_no_replace(source, destination):
             raise
 
 
-def _write_metadata(path, metadata, exiftool_path, preserve_identifier=False, force=False):
+def _write_metadata(path, metadata, exiftool_path, preserve_identifier=False, force=False, self_heal=False):
     try:
         return _write_metadata_once(path, metadata, exiftool_path, preserve_identifier)
     except Exception as error:
-        if not force or path.suffix.casefold() == ".mkv":
+        if (not force and not self_heal) or path.suffix.casefold() == ".mkv":
             raise
-        return _force_write(path, metadata, exiftool_path, preserve_identifier, error)
+        return _force_write(path, metadata, exiftool_path, preserve_identifier, error, self_heal=self_heal and not force)
 
 
-def _force_write(path, metadata, exiftool_path, preserve_identifier, first_error):
+def _force_write(path, metadata, exiftool_path, preserve_identifier, first_error, self_heal=False):
     errors = [str(first_error)]
     writer = set_video_metadata if path.suffix.casefold() in VIDEO_EXTENSIONS else set_image_metadata
     # Stripping metadata would destroy the Live Photo identifier.
@@ -295,12 +416,14 @@ def _force_write(path, metadata, exiftool_path, preserve_identifier, first_error
             writer(str(temporary), metadata["latitude"], metadata["longitude"], metadata["altitude"], metadata["timestamp"], metadata["description"], exiftool_path=exiftool_path, extra_options=("-m",))
             os.replace(temporary, path)
             warning = setWindowsTime(str(path), metadata["timestamp"])
-            return "; ".join(filter(None, (f"Force match: {label}", warning)))
+            prefix = "Self-healed" if self_heal else "Force match"
+            return "; ".join(filter(None, (f"{prefix}: {label}", warning)))
         except Exception as error:
             errors.append(f"{label}: {error}")
         finally:
             temporary.unlink(missing_ok=True)
-    raise RuntimeError("Force match failed: " + "; ".join(errors))
+    prefix = "Self-healing" if self_heal else "Force match"
+    raise RuntimeError(f"{prefix} failed: " + "; ".join(errors))
 
 
 def _write_metadata_once(path, metadata, exiftool_path, preserve_identifier=False):
@@ -322,7 +445,7 @@ def _write_metadata_once(path, metadata, exiftool_path, preserve_identifier=Fals
     return setWindowsTime(str(path), metadata["timestamp"])
 
 
-def _restore(task, root, exiftool_path, force=False, in_place=False):
+def _restore(task, root, exiftool_path, force=False, in_place=False, self_heal=False):
     if in_place:
         items = [(task["source"], task["source"])]
         if task["companion"] is not None:
@@ -356,10 +479,7 @@ def _restore(task, root, exiftool_path, force=False, in_place=False):
     try:
         for source, destination in items:
             identifier = task.get("identifier") if source in (task["source"], task["companion"]) else None
-            if force:
-                warning = _write_metadata(source, task["metadata"], exiftool_path, preserve_identifier=bool(identifier), force=True)
-            else:
-                warning = _write_metadata(source, task["metadata"], exiftool_path, preserve_identifier=bool(identifier))
+            warning = _write_metadata(source, task["metadata"], exiftool_path, preserve_identifier=bool(identifier), force=force, self_heal=self_heal)
             if identifier and get_content_identifier(str(source), exiftool_path) != identifier:
                 raise RuntimeError("Live Photo identifier changed during metadata writing; media left in original folder")
             if warning:
@@ -407,12 +527,12 @@ def _report(root, records, in_place=False):
     return filename
 
 
-def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False):
     try:
         root = Path(browserPath).expanduser().resolve(strict=True)
         if not root.is_dir() or root.name in {"MatchedMedia", "EditedRaw"}:
             raise ValueError("Select the original Takeout folder, not an output folder")
-        tasks, matchers = _plan(root, editedW.strip(), window, cancel_event, force)
+        tasks, matchers = _plan(root, editedW.strip(), window, cancel_event, force, self_heal)
         if force:
             for task in tasks:
                 if task["status"] == "error":
@@ -440,7 +560,7 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
                     try:
                         if force and not dry_run:
                             renamed = _fix_extensions(task)
-                        task["companion"] = _confirmed_companion(task, matchers[task["source"].parent], claimed_sources, exiftoolPath)
+                        task["companion"] = _confirmed_companion(task, matchers[task["source"].parent], claimed_sources, exiftoolPath, self_heal)
                         if task["companion"] is not None:
                             claimed_sources.add(task["companion"])
                             if task["companion"] not in covered:
@@ -449,7 +569,7 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
                         if dry_run:
                             task["status"] = "preview"
                         else:
-                            created, warnings = _restore(task, root, exiftoolPath, force, in_place)
+                            created, warnings = _restore(task, root, exiftoolPath, force, in_place, self_heal)
                             task["status"] = "restored" if created else "already_restored"
                             task["details"] = "; ".join(filter(None, (task["details"], *warnings)))
                     except Exception as error:

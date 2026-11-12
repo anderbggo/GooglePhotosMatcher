@@ -22,6 +22,15 @@ When you download media from Google Photos via Takeout, the files lose important
 
 **GPMatcher** reads those JSONs and writes metadata directly into the original photos and videos. By default, successfully restored media are moved into a single flat `MatchedMedia` folder, while original versions of edited photos go into `EditedRaw`. Alternatively, enabling **in-place mode** preserves your entire folder structure: media files remain in their original year and album folders, metadata is merged directly into them, and no output folders are created. If two files share a name, the later one gets a number (`photo(1).jpg`). JSON sidecars are deleted after a successful restoration; failed or unmatched media and their JSON remain in their original folders.
 
+**Self-healing metadata** automatically repairs corrupted or incomplete sidecars:
+- **Corrupted EXIF repair:** Automatically rebuilds damaged EXIF blocks using ExifTool cleanup pipelines without requiring manual Force match.
+- **Filename timestamp synthesis:** If Google Takeout loses or corrupts the timestamp inside the JSON sidecar, the capture date is extracted directly from camera and smartphone filename patterns (`IMG_YYYYMMDD_HHMMSS`, `PXL_...`, `VID_...`, etc.).
+- **GPS sanitization:** Discards out-of-range or malformed coordinates while preserving valid capture dates and descriptions.
+- **Apple Live Photo pairing:** Generates or synchronizes Apple Content Identifiers between photos and companion videos when missing.
+
+**Multi-part Takeout & Cross-folder Matching:**
+When large Takeout archives are split into multiple parts (e.g., `Part 01`, `Part 02`), media files in one folder can be matched with JSON sidecars split into sibling folders. Album and year folder partitions are also resolved seamlessly. Dynamic truncation handling accurately matches long titles truncated across character boundaries.
+
 **Make a backup before using Match or Force match.** There is no automatic copy or undo: if writing fails partway through, some metadata may already have changed. Force match may remove existing camera or lens metadata as a last resort. The app displays a confirmation before every Match or Force match run; Preview does not modify or move media.
 
 Matching uses both the JSON filename and its `title`, including numbered duplicates, supplemental metadata suffixes, case differences, Unicode normalization, edited versions, and recognizable Takeout truncation patterns. Ambiguous matches are reported instead of guessed.
@@ -90,8 +99,8 @@ Often, yes. Photos taken with a camera or phone usually keep their original EXIF
 ExifTool is included in the standalone Windows build. It is still required separately when running the Python source or using an older, unbundled executable.
 
 - JPEG/JPG: restored with piexif, with ExifTool as a fallback for problematic EXIF. Apple MakerNotes use ExifTool to preserve Live Photo metadata.
-- HEIC/HEIF, PNG, WebP, TIFF/TIF: require ExifTool.
-- MP4, MOV, 3GP, M4V: require ExifTool.
+- HEIC/HEIF, PNG, WebP, TIFF/TIF, DNG, GIF, BMP, and RAW formats (CR2, NEF, ARW): require ExifTool.
+- MP4, MOV, 3GP, M4V, AVI, WMV: require ExifTool.
 - MKV: detected and reported, but not restored because ExifTool cannot write its metadata.
 
 Capture timestamps are interpreted in the computer's local timezone. EXIF timezone offsets and QuickTime UTC conversion are updated consistently; Takeout does not always provide the original capture timezone.

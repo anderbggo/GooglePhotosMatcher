@@ -1238,6 +1238,80 @@ class ProcessingTests(unittest.TestCase):
         self.assertFalse((self.root / "EditedRaw").exists())
         self.assertFalse((folder / "photo.jpg.json").exists())
 
+    def test_cross_part_archive_split_matches_sibling_folders(self):
+        folder1 = self.root / "Takeout Part 01" / "Photos from 2020"
+        folder2 = self.root / "Takeout Part 02" / "Photos from 2020"
+        folder1.mkdir(parents=True)
+        folder2.mkdir(parents=True)
+        photo = folder1 / "vacation.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo)
+        (folder2 / "vacation.jpg.json").write_text(json.dumps({"title": "vacation.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo.is_file())
+        self.assertFalse((folder2 / "vacation.jpg.json").exists())
+
+    def test_cross_folder_album_vs_year_matches_unambiguous_stem(self):
+        album = self.root / "Trip to Paris"
+        year = self.root / "Photos from 2021"
+        album.mkdir(parents=True)
+        year.mkdir(parents=True)
+        photo = year / "eiffel.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo)
+        (album / "eiffel.jpg.json").write_text(json.dumps({"title": "eiffel.jpg", "photoTakenTime": {"timestamp": "1000000000"}}), encoding="utf-8")
+        summary = self.run_process(in_place=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue(photo.is_file())
+        self.assertFalse((album / "eiffel.jpg.json").exists())
+
+    def test_self_heal_reconstructs_timestamp_from_filename(self):
+        self.photo("IMG_20210815_143000.jpg")
+        (self.root / "IMG_20210815_143000.jpg.json").write_text(json.dumps({"title": "IMG_20210815_143000.jpg", "photoTakenTime": {}}), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+
+    def test_self_heal_sanitizes_invalid_gps_coordinates(self):
+        self.photo("beach.jpg")
+        (self.root / "beach.jpg.json").write_text(json.dumps({
+            "title": "beach.jpg",
+            "photoTakenTime": {"timestamp": "1500000000"},
+            "geoData": {"latitude": 999.0, "longitude": 0.0, "altitude": 0.0}
+        }), encoding="utf-8")
+        summary_normal = self.run_process()
+        self.assertEqual(summary_normal.get("error"), 1)
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+
+    def test_self_heal_generates_live_photo_identifier_for_unpaired_companion(self):
+        self.photo("IMG_0042.jpg")
+        video = self.root / "IMG_0042.mov"
+        video.write_bytes(b"video bytes")
+        self.sidecar("IMG_0042.jpg.json", title="IMG_0042.jpg")
+        stored_ids = {}
+        def fake_get_id(path, *args):
+            return stored_ids.get(Path(path).name)
+        def fake_set_id(path, ident, *args):
+            stored_ids[Path(path).name] = ident
+        with patch("main.get_content_identifier", side_effect=fake_get_id), \
+             patch("main.set_content_identifier", side_effect=fake_set_id), \
+             patch("main.set_image_metadata"), \
+             patch("main.set_video_metadata"):
+            summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertIn("IMG_0042.mov", stored_ids)
+        self.assertTrue(stored_ids["IMG_0042.mov"])
+
+    def test_expanded_formats_support_matching(self):
+        from matching import detect_media_extension, MEDIA_EXTENSIONS
+        for ext in (".dng", ".gif", ".bmp", ".raw", ".cr2", ".nef", ".arw", ".avi", ".wmv"):
+            self.assertIn(ext, MEDIA_EXTENSIONS)
+        gif_header = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+        gif_path = self.root / "animation.gif"
+        gif_path.write_bytes(gif_header)
+        self.assertEqual(detect_media_extension(gif_path), ".gif")
+
 
 if __name__ == "__main__":
     unittest.main()

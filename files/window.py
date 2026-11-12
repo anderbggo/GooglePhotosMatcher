@@ -271,6 +271,11 @@ def _apply_preferences(window, values, persist=False):
         window["-IN_PLACE-"].set_tooltip(text(language, "in_place_tip"))
     except (KeyError, TypeError):
         pass
+    try:
+        window["-SELF_HEAL-"].update(value=values.get("self_heal", True), text=text(language, "self_heal"))
+        window["-SELF_HEAL-"].set_tooltip(text(language, "self_heal_tip"))
+    except (KeyError, TypeError):
+        pass
     for key, options, selected in (("-THEME-", THEME_OPTIONS, values["theme"]), ("-LANGUAGE-", LANGUAGE_OPTIONS, values["language"])):
         labels = _choice_labels(language, options)
         window[key].update(values=labels, value=labels[options.index(selected)])
@@ -329,7 +334,10 @@ def build_window(preferences=None):
         [sg.Text(text(language, "folder"), key="-FOLDER_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 10)))],
         [sg.Input(key="-IN2-", size=(46, 1), expand_x=True, border_width=0, pad=((0, 12), (0, 0))),
          sg.FolderBrowse(text(language, "browse"), key="-BROWSE_FOLDER-", target="-IN2-", size=(15, 1), button_color=(palette["text"], palette["panel_alt"]))],
-        [sg.Checkbox(text(language, "in_place"), key="-IN_PLACE-", default=preferences.get("in_place", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "in_place_tip"), pad=((0, 0), (8, 0)))],
+        [
+            sg.Checkbox(text(language, "in_place"), key="-IN_PLACE-", default=preferences.get("in_place", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "in_place_tip"), pad=((0, 16), (8, 0))),
+            sg.Checkbox(text(language, "self_heal"), key="-SELF_HEAL-", default=preferences.get("self_heal", True), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "self_heal_tip"), pad=((0, 0), (8, 0))),
+        ],
     ], pad=(28, 12), background_color=palette["panel"])
     actions = panel([[
         sg.Button(text(language, "match"), key="Match", size=(15, 1), font=(FONT, 11, "bold"), border_width=0, pad=((0, 12), (0, 0))),
@@ -388,6 +396,10 @@ def _set_busy(window, busy):
         window[key].update(disabled=busy)
     try:
         window["-IN_PLACE-"].update(disabled=busy)
+    except (KeyError, TypeError):
+        pass
+    try:
+        window["-SELF_HEAL-"].update(disabled=busy)
     except (KeyError, TypeError):
         pass
     window["Match"].update(button_color=(palette["muted"], palette["panel_alt"]) if busy else (palette["on_accent"], palette["accent"]))
@@ -469,6 +481,7 @@ def run_app():
             summary = {}
             window.gpm_summary = summary
             in_place = bool(values.get("-IN_PLACE-", False))
+            self_heal = bool(values.get("-SELF_HEAL-", True))
             results_folder = str(folder.resolve()) if in_place else str(folder.resolve() / "MatchedMedia")
             _set_busy(window, True)
             window["Report"].update(disabled=True)
@@ -481,11 +494,19 @@ def run_app():
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, **({"force": True} if event == "Force" else {})}, daemon=True)
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
         elif event == "-IN_PLACE-":
             preferences = dict(window.gpm_preferences)
             preferences["in_place"] = bool(values["-IN_PLACE-"])
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError as error:
+                _append_log(window, text("en", "preferences_failed", detail=error))
+        elif event == "-SELF_HEAL-":
+            preferences = dict(window.gpm_preferences)
+            preferences["self_heal"] = bool(values["-SELF_HEAL-"])
             window.gpm_preferences = preferences
             try:
                 save_preferences(preferences)
