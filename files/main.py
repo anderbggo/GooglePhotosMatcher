@@ -124,8 +124,33 @@ def _plan(root, edited_word, window, cancel_event, force=False, self_heal=False)
                 last_scan_update = now
                 window.write_event_value("-UPDATE_PROGRESS-", (0, f"Scanning: {json_path.name}"))
             try:
-                with json_path.open(encoding="utf-8-sig") as stream:
-                    data = json.load(stream)
+                data = None
+                try:
+                    with json_path.open(encoding="utf-8-sig") as stream:
+                        data = json.load(stream)
+                except (OSError, UnicodeDecodeError, ValueError) as json_err:
+                    if self_heal:
+                        media_name, _ = sidecar_media_name(json_name)
+                        cand = None
+                        if media_name and media_name in matcher.names:
+                            cand = media_name
+                        elif media_name:
+                            cand_stem = normalized_name(os.path.splitext(media_name)[0])
+                            stem_matches = matcher.by_stem.get(cand_stem, [])
+                            if len(stem_matches) == 1:
+                                cand = stem_matches[0]
+                        if cand and (folder / cand).is_file():
+                            synthesized = parse_filename_timestamp(cand) or parse_filename_timestamp(json_name) or get_container_datetime(str(folder / cand))
+                            if synthesized:
+                                data = {
+                                    "title": cand,
+                                    "photoTakenTime": {"timestamp": str(synthesized)},
+                                    "description": "",
+                                    "geoData": {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0},
+                                }
+                                task["details"] = "Self-healed: recovered metadata from filename/container (corrupted JSON sidecar)"
+                    if data is None:
+                        raise json_err
                 if not isinstance(data, dict):
                     raise ValueError("JSON metadata must be an object")
                 title = data.get("title")

@@ -1632,6 +1632,20 @@ class StreamCorruptionAndMotionPhotoRecoveryTests(unittest.TestCase):
         # Should be renamed to .jpg and placed in output
         self.assertTrue((self.root / "MatchedMedia" / "Screenshot.jpg").is_file())
 
+    def test_self_heal_recovers_empty_or_corrupt_json_sidecar(self):
+        photo = self.root / "IMG_20220619_184352.jpg"
+        Image.new("RGB", (16, 16), "green").save(photo, format="JPEG")
+        # 0-byte JSON sidecar
+        (self.root / "IMG_20220619_184352.jpg.json").write_bytes(b"")
+
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertNotIn("error", summary)
+
+    def test_parse_filename_timestamp_snapchat_epoch(self):
+        from metadata import parse_filename_timestamp
+        self.assertEqual(parse_filename_timestamp("Snapchat-1482486059.mp4"), 1482486059)
+
 
 if __name__ == "__main__":
     unittest.main()

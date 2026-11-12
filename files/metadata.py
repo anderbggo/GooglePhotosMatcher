@@ -60,6 +60,21 @@ def parse_filename_timestamp(filename):
                     return int(dt.timestamp())
                 except (ValueError, OverflowError):
                     continue
+
+    epoch_patterns = [
+        # Snapchat / Facebook / Instant Messenger: Snapchat-1482486059.mp4, 1482486059123.jpg
+        r"(?:Snapchat|Facebook|FB_IMG)[_-]([1-2]\d{9})(?!\d)",
+        r"(?<!\d)([1-2]\d{9})(?!\d)",
+        r"(?<!\d)([1-2]\d{12})(?!\d)",
+    ]
+    for pattern in epoch_patterns:
+        match = re.search(pattern, filename, re.IGNORECASE)
+        if match:
+            raw_ts = int(match.group(1))
+            if raw_ts > 100_000_000_000:
+                raw_ts //= 1000
+            if 631152000 <= raw_ts <= 2208988800:
+                return raw_ts
     return None
 
 
