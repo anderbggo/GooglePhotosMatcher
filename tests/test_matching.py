@@ -1571,5 +1571,67 @@ class Version32Tests(unittest.TestCase):
         self.assertTrue(prefs["merge_takeouts"])
 
 
+class StreamCorruptionAndMotionPhotoRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.window = RecordingWindow()
+
+    def run_process(self, **options):
+        return mainProcess(str(self.root), self.window, "", **options)
+
+    def test_self_heal_rescues_truncated_mdat_atom_video(self):
+        video = self.root / "truncated.mp4"
+        video.write_bytes(b"damaged mp4 data")
+        (self.root / "truncated.mp4.json").write_text(json.dumps({
+            "title": "truncated.mp4",
+            "photoTakenTime": {"timestamp": "1659463715"}
+        }), encoding="utf-8")
+
+        with patch("main.set_video_metadata", side_effect=RuntimeError("ExifTool failed: Error: Truncated mdat atom")), \
+             patch("main.run_exiftool", side_effect=RuntimeError("Error: Truncated mdat atom")):
+            summary = self.run_process(self_heal=True)
+
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertAlmostEqual((self.root / "MatchedMedia" / "truncated.mp4").stat().st_mtime, 1659463715)
+
+    def test_self_heal_motion_photo_proceeds_even_if_container_drops_identifier(self):
+        photo = self.root / "MVIMG_001.jpg"
+        Image.new("RGB", (16, 16), "blue").save(photo)
+        video = self.root / "MVIMG_001.mp4"
+        video.write_bytes(b"motion video data")
+        (self.root / "MVIMG_001.jpg.json").write_text(json.dumps({
+            "title": "MVIMG_001.jpg",
+            "photoTakenTime": {"timestamp": "1600000000"}
+        }), encoding="utf-8")
+
+        # Simulate companion pairing with synthetic ID, but reading back identifier returns None
+        with patch("main.get_content_identifier", return_value=None), \
+             patch("main.set_content_identifier"), \
+             patch("main.set_image_metadata"), \
+             patch("main.set_video_metadata"):
+            summary = self.run_process(self_heal=True)
+
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertTrue((self.root / "MatchedMedia" / "MVIMG_001.jpg").is_file())
+        self.assertTrue((self.root / "MatchedMedia" / "MVIMG_001.mp4").is_file())
+
+    def test_self_heal_renames_jpeg_disguised_as_png_and_restores_without_error(self):
+        # A file named Screenshot.png but whose content is actually a JPEG
+        fake_png = self.root / "Screenshot.png"
+        Image.new("RGB", (16, 16), "yellow").save(fake_png, format="JPEG")
+        (self.root / "Screenshot.png.json").write_text(json.dumps({
+            "title": "Screenshot.png",
+            "photoTakenTime": {"timestamp": "1720000000"}
+        }), encoding="utf-8")
+
+        summary = self.run_process(self_heal=True)
+        self.assertEqual(summary.get("restored"), 1)
+        self.assertNotIn("error", summary)
+        # Should be renamed to .jpg and placed in output
+        self.assertTrue((self.root / "MatchedMedia" / "Screenshot.jpg").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

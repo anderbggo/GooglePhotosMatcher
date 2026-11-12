@@ -70,6 +70,8 @@ SPANISH_MESSAGES = {
     "Live Photo identifier changed during metadata writing; output not published": "El identificador Live Photo ha cambiado; resultado no publicado",
     "Live Photo identifier changed during metadata writing; media left in original folder": "El identificador Live Photo ha cambiado; archivos en su carpeta original",
     "MKV metadata cannot be written by ExifTool; original and JSON left untouched": "ExifTool no puede escribir metadatos MKV; original y JSON sin modificar",
+    "restored metadata; Live Photo identifier not preserved by container": "metadatos restaurados; contenedor no conserva el identificador Live Photo",
+    "applied filesystem timestamp (video container truncated/damaged)": "fecha del sistema de archivos aplicada (contenedor de vídeo dañado/truncado)",
     "ExifTool is required for this file. Use the standalone build, or install ExifTool on PATH when running the Python source.": "Este archivo necesita ExifTool. Usa el EXE completo o instala ExifTool en PATH si ejecutas el c\u00f3digo Python.",
 }
 SPANISH_PREFIXES = {

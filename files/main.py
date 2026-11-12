@@ -302,7 +302,7 @@ def _free_names(destinations):
             return candidates
 
 
-def _fix_extensions(task):
+def _fix_extensions(task, self_heal=False):
     """Rename media whose content belongs to another format; returns the renames for rollback."""
     renamed = []
     try:
@@ -317,7 +317,8 @@ def _fix_extensions(task):
             _move_no_replace(path, target)
             renamed.append((key, target, path))
             task[key] = target
-            task["details"] = "; ".join(filter(None, (task["details"], f"Force match: renamed {path.name} to {target.name} (real file type)")))
+            prefix = "Self-healed" if self_heal else "Force match"
+            task["details"] = "; ".join(filter(None, (task["details"], f"{prefix}: renamed {path.name} to {target.name} (real file type)")))
     except OSError:
         _undo_renames(task, renamed)
         raise
@@ -363,6 +364,7 @@ def _confirmed_companion(task, matcher, claimed_sources, exiftool_path, self_hea
                     except Exception:
                         pass
                     task["identifier"] = new_id
+                    task["identifier_synthetic"] = True
                     task["details"] = "; ".join(filter(None, (task["details"], "Self-healed: generated Live Photo identifier")))
                     return companion
                 except Exception:
@@ -447,6 +449,13 @@ def _force_write(path, metadata, exiftool_path, preserve_identifier, first_error
         finally:
             temporary.unlink(missing_ok=True)
     prefix = "Self-healing" if self_heal else "Force match"
+    if any(
+        any(frag.lower() in err.lower() for frag in ("truncated mdat atom", "format error in file", "file is empty", "no writable tags set", "corrupted", "not a valid png", "not a valid jpeg", "looks more like"))
+        for err in errors
+    ) or self_heal:
+        warning = setWindowsTime(str(path), metadata["timestamp"])
+        res_prefix = "Self-healed" if self_heal else "Force match"
+        return "; ".join(filter(None, (f"{res_prefix}: applied filesystem timestamp (metadata container write skipped)", warning)))
     raise RuntimeError(f"{prefix} failed: " + "; ".join(errors))
 
 
@@ -505,7 +514,10 @@ def _restore(task, root, exiftool_path, force=False, in_place=False, self_heal=F
             identifier = task.get("identifier") if source in (task["source"], task["companion"]) else None
             warning = _write_metadata(source, task["metadata"], exiftool_path, preserve_identifier=bool(identifier), force=force, self_heal=self_heal)
             if identifier and get_content_identifier(str(source), exiftool_path) != identifier:
-                raise RuntimeError("Live Photo identifier changed during metadata writing; media left in original folder")
+                if self_heal or force or task.get("identifier_synthetic"):
+                    warning = "; ".join(filter(None, (warning, "Self-healed: restored metadata; Live Photo identifier not preserved by container")))
+                else:
+                    raise RuntimeError("Live Photo identifier changed during metadata writing; media left in original folder")
             if warning:
                 warnings.append(warning)
         if not in_place:
@@ -588,8 +600,8 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
                 if task["status"] == "pending":
                     renamed = []
                     try:
-                        if force and not dry_run:
-                            renamed = _fix_extensions(task)
+                        if (force or self_heal) and not dry_run:
+                            renamed = _fix_extensions(task, self_heal=self_heal and not force)
                         task["companion"] = _confirmed_companion(task, matchers[task["source"].parent], claimed_sources, exiftoolPath, self_heal)
                         if task["companion"] is not None:
                             claimed_sources.add(task["companion"])
