@@ -1561,9 +1561,9 @@ class TakeoutConsolidatorTests(unittest.TestCase):
 
 
 class Version32Tests(unittest.TestCase):
-    def test_app_version_is_3_2(self):
+    def test_app_version_is_3_3(self):
         from window import APP_VERSION
-        self.assertEqual(APP_VERSION, "3.2")
+        self.assertEqual(APP_VERSION, "3.3")
 
     def test_merge_takeouts_preference_validation(self):
         from preferences import validate_preferences
@@ -1645,6 +1645,69 @@ class StreamCorruptionAndMotionPhotoRecoveryTests(unittest.TestCase):
     def test_parse_filename_timestamp_snapchat_epoch(self):
         from metadata import parse_filename_timestamp
         self.assertEqual(parse_filename_timestamp("Snapchat-1482486059.mp4"), 1482486059)
+
+
+class Version33EnterpriseFeaturesTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.window = RecordingWindow()
+
+    def test_crash_proof_journal_immediate_fsync_and_read(self):
+        from journal import CrashProofReportJournal
+        csv_file = self.root / "matching-journal.csv"
+        journal = CrashProofReportJournal(csv_file)
+        journal.record("sidecar.json", "photo.jpg", "restored", "exact", "Applied EXIF")
+        self.assertEqual(journal.record_count, 1)
+        with csv_file.open(encoding="utf-8-sig") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["media"], "photo.jpg")
+        self.assertEqual(rows[0]["status"], "restored")
+
+    def test_detect_prior_progress_with_partial_journal(self):
+        from journal import detect_prior_progress
+        # Create media and json
+        (self.root / "photo.jpg").write_bytes(b"data")
+        (self.root / "orphan.jpg").write_bytes(b"data")
+        (self.root / "photo.jpg.json").write_text("{}", encoding="utf-8")
+        # Create a mock previous report
+        report = self.root / "matching-report-previous.csv"
+        report.write_text("json,media,status,rule,details\nphoto.jpg.json,photo.jpg,restored,exact,\n", encoding="utf-8")
+
+        res = detect_prior_progress(self.root)
+        self.assertEqual(res["total_media"], 2)
+        self.assertEqual(res["total_jsons"], 1)
+        self.assertTrue(res["has_prior_report"])
+        self.assertEqual(res["prior_restored"], 1)
+        self.assertEqual(res["standalone_media"], 1)
+
+    def test_dynamic_folder_metrics_and_eta(self):
+        from governor import inspect_folder_metrics, calculate_dynamic_eta
+        (self.root / "file1.bin").write_bytes(b"x" * 1024)
+        (self.root / "file2.bin").write_bytes(b"y" * 2048)
+        metrics = inspect_folder_metrics(self.root)
+        self.assertEqual(metrics["total_files"], 2)
+        self.assertEqual(metrics["total_bytes"], 3072)
+        eta = calculate_dynamic_eta(30000, threads=4)
+        self.assertIn("mins", eta)
+
+    def test_concurrency_multi_threaded_execution(self):
+        # Create 4 photos and sidecars
+        for i in range(4):
+            img_path = self.root / f"photo_{i}.jpg"
+            Image.new("RGB", (16, 16), "blue").save(img_path, format="JPEG")
+            (self.root / f"photo_{i}.jpg.json").write_text(json.dumps({
+                "title": f"photo_{i}.jpg",
+                "photoTakenTime": {"timestamp": "1720000000"}
+            }), encoding="utf-8")
+
+        summary = mainProcess(str(self.root), self.window, "", concurrency=4, self_heal=True)
+        self.assertEqual(summary.get("restored"), 4)
+        self.assertNotIn("error", summary)
+        # Check that matching-journal.csv was written in real-time
+        self.assertTrue((self.root / "MatchedMedia" / "matching-journal.csv").is_file())
 
 
 if __name__ == "__main__":

@@ -39,7 +39,10 @@ if sys.version_info >= (3, 14):
 PALETTE = LIGHT_PALETTE
 FONT = "Segoe UI" if platform.system() == "Windows" else "Helvetica"
 DISPLAY_FONT = "Bahnschrift" if platform.system() == "Windows" else "Avenir Next"
-APP_VERSION = "3.2"
+APP_VERSION = "3.3"
+CPU_COUNT = os.cpu_count() or 4
+THREAD_OPTIONS = tuple(["Auto"] + [str(c) for c in (1, 2, 4, 8, 12, 16, 24, 32) if c <= max(CPU_COUNT, 8)] + ([str(CPU_COUNT)] if str(CPU_COUNT) not in ("1", "2", "4", "8", "12", "16", "24", "32") else []))
+RAM_OPTIONS = ("Auto", "2 GB", "4 GB", "8 GB", "16 GB", "32 GB")
 PROJECT_LINKS = {
     "About": "https://anderbggo.github.io/gpmatcher",
     "Support": "https://anderbggo.github.io/contribute",
@@ -89,7 +92,7 @@ def _choice_labels(language, options):
     return ["English" if option == "en" else "Espa\u00f1ol" if option == "es" else text(language, option) for option in options]
 
 
-def _install_button_feedback(window, keys=("Match", "Preview", "Force", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")):
+def _install_button_feedback(window, keys=("Match", "Preview", "Force", "DetectSemiMatched", "Cancel", "Results", "Report", "About", "Support", "-BROWSE_FOLDER-")):
     previous = getattr(window, "gpm_button_bindings", None)
     if isinstance(previous, list):
         for widget, sequence, binding in previous:
@@ -100,7 +103,10 @@ def _install_button_feedback(window, keys=("Match", "Preview", "Force", "Cancel"
     renderers = {}
     bindings = []
     for key in keys:
-        widget = window[key].Widget
+        try:
+            widget = window[key].Widget
+        except (KeyError, TypeError, AttributeError):
+            continue
         state = {"hover": False, "pressed": False, "focus": False}
 
         def render(widget=widget, key=key, state=state):
@@ -382,12 +388,17 @@ def _apply_preferences(window, values, persist=False):
     _style_native_controls(window)
     labels = {
         "-FOLDER_LABEL-": "folder", "-THEME_LABEL-": "theme", "-LANGUAGE_LABEL-": "language",
+        "-THREADS_LABEL-": "cpu_threads", "-RAM_LABEL-": "ram_buffer",
         "-ACTIVITY_LABEL-": "activity", "-BROWSE_FOLDER-": "browse", "Match": "match", "Preview": "preview", "Force": "force",
+        "DetectSemiMatched": "detect_semi_matched",
         "Cancel": "cancel", "Results": "results", "Report": "report", "About": "about", "Support": "support",
         "-MATCHED-label": "matched", "-ERRORS-label": "errors", "-UNMATCHED-label": "unmatched",
     }
     for key, translation in labels.items():
-        window[key].update(text(language, translation))
+        try:
+            window[key].update(text(language, translation))
+        except (KeyError, TypeError):
+            pass
     try:
         window["-IN_PLACE-"].update(value=values.get("in_place", False), text=text(language, "in_place"))
         window["-IN_PLACE-"].set_tooltip(text(language, "in_place_tip"))
@@ -410,8 +421,11 @@ def _apply_preferences(window, values, persist=False):
     for key, options, selected in (("-THEME-", THEME_OPTIONS, values["theme"]), ("-LANGUAGE-", LANGUAGE_OPTIONS, values["language"])):
         labels = _choice_labels(language, options)
         window[key].update(values=labels, value=labels[options.index(selected)])
-    for key, translation in (("About", "about_tip"), ("Support", "support_tip"), ("Force", "force_tip"), ("-THEME-", "theme_tip"), ("-LANGUAGE-", "language_tip")):
-        window[key].set_tooltip(text(language, translation))
+    for key, translation in (("About", "about_tip"), ("Support", "support_tip"), ("Force", "force_tip"), ("-THEME-", "theme_tip"), ("-LANGUAGE-", "language_tip"), ("DetectSemiMatched", "detect_semi_matched_tip"), ("-CPU_THREADS-", "cpu_threads_tip"), ("-RAM_BUFFER-", "ram_buffer_tip")):
+        try:
+            window[key].set_tooltip(text(language, translation))
+        except (KeyError, TypeError):
+            pass
     _install_button_feedback(window)
     _update_counters(window, window.gpm_summary)
     status = window.gpm_status
@@ -457,14 +471,18 @@ def build_window(preferences=None):
         sg.Text(f"v{APP_VERSION}", font=(FONT, 11, "bold"), text_color=palette["accent"], background_color=palette["panel"]),
     ]], pad=(28, 18), background_color=palette["panel"])
     appearance = panel([[
-        sg.Text(text(language, "theme"), key="-THEME_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 10), (0, 0))),
-        sg.Combo(_choice_labels(language, THEME_OPTIONS), default_value=_choice_labels(language, THEME_OPTIONS)[THEME_OPTIONS.index(preferences["theme"])], key="-THEME-", readonly=True, enable_events=True, size=(12, 1), font=(FONT, 10), pad=((0, 24), (0, 0))),
-        sg.Text(text(language, "language"), key="-LANGUAGE_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 10), (0, 0))),
-        sg.Combo(_choice_labels(language, LANGUAGE_OPTIONS), default_value=_choice_labels(language, LANGUAGE_OPTIONS)[LANGUAGE_OPTIONS.index(preferences["language"])], key="-LANGUAGE-", readonly=True, enable_events=True, size=(14, 1), font=(FONT, 10)),
+        sg.Text(text(language, "theme"), key="-THEME_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 8), (0, 0))),
+        sg.Combo(_choice_labels(language, THEME_OPTIONS), default_value=_choice_labels(language, THEME_OPTIONS)[THEME_OPTIONS.index(preferences["theme"])], key="-THEME-", readonly=True, enable_events=True, size=(10, 1), font=(FONT, 10), pad=((0, 16), (0, 0))),
+        sg.Text(text(language, "language"), key="-LANGUAGE_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 8), (0, 0))),
+        sg.Combo(_choice_labels(language, LANGUAGE_OPTIONS), default_value=_choice_labels(language, LANGUAGE_OPTIONS)[LANGUAGE_OPTIONS.index(preferences["language"])], key="-LANGUAGE-", readonly=True, enable_events=True, size=(11, 1), font=(FONT, 10), pad=((0, 16), (0, 0))),
+        sg.Text(text(language, "cpu_threads"), key="-THREADS_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 6), (0, 0))),
+        sg.Combo(THREAD_OPTIONS, default_value=str(preferences.get("cpu_threads", "Auto")), key="-CPU_THREADS-", readonly=True, enable_events=True, size=(8, 1), font=(FONT, 10), tooltip=text(language, "cpu_threads_tip"), pad=((0, 16), (0, 0))),
+        sg.Text(text(language, "ram_buffer"), key="-RAM_LABEL-", background_color=palette["panel"], text_color=palette["muted"], pad=((0, 6), (0, 0))),
+        sg.Combo(RAM_OPTIONS, default_value=str(preferences.get("ram_buffer", "Auto")), key="-RAM_BUFFER-", readonly=True, enable_events=True, size=(9, 1), font=(FONT, 10), tooltip=text(language, "ram_buffer_tip")),
     ]], pad=(28, 8), background_color=palette["panel"])
     settings = panel([
         [sg.Text(text(language, "folder"), key="-FOLDER_LABEL-", font=(FONT, 11, "bold"), background_color=palette["panel"], pad=((0, 0), (0, 10)))],
-        [sg.Input(key="-IN2-", size=(46, 1), expand_x=True, border_width=0, pad=((0, 12), (0, 0))),
+        [sg.Input(key="-IN2-", size=(46, 1), expand_x=True, border_width=0, enable_events=True, pad=((0, 12), (0, 0))),
          sg.FolderBrowse(text(language, "browse"), key="-BROWSE_FOLDER-", target="-IN2-", size=(15, 1), button_color=(palette["text"], palette["panel_alt"]))],
         [
             sg.Checkbox(text(language, "in_place"), key="-IN_PLACE-", default=preferences.get("in_place", False), enable_events=True, font=(FONT, 10), background_color=palette["panel"], text_color=palette["text"], tooltip=text(language, "in_place_tip"), pad=((0, 16), (8, 0))),
@@ -473,11 +491,12 @@ def build_window(preferences=None):
         ],
     ], pad=(28, 12), background_color=palette["panel"])
     actions = panel([[
-        sg.Button(text(language, "match"), key="Match", size=(15, 1), font=(FONT, 11, "bold"), border_width=0, pad=((0, 12), (0, 0))),
-        sg.Button(text(language, "preview"), key="Preview", size=(14, 1), border_width=0, button_color=(palette["text"], palette["panel_alt"]), pad=((0, 12), (0, 0))),
+        sg.Button(text(language, "match"), key="Match", size=(14, 1), font=(FONT, 11, "bold"), border_width=0, pad=((0, 10), (0, 0))),
+        sg.Button(text(language, "preview"), key="Preview", size=(13, 1), border_width=0, button_color=(palette["text"], palette["panel_alt"]), pad=((0, 10), (0, 0))),
+        sg.Button(text(language, "detect_semi_matched"), key="DetectSemiMatched", size=(27, 1), border_width=0, button_color=(palette["text"], palette["panel_alt"]), tooltip=text(language, "detect_semi_matched_tip"), pad=((0, 10), (0, 0))),
         # The zero-size canvas keeps the hidden button's place in the row.
         sg.Column([[
-            sg.Button(text(language, "force"), key="Force", size=(14, 1), visible=False, border_width=0, button_color=(palette["text"], palette["panel_alt"]), tooltip=text(language, "force_tip"), pad=((0, 12), (0, 0))),
+            sg.Button(text(language, "force"), key="Force", size=(13, 1), visible=False, border_width=0, button_color=(palette["text"], palette["panel_alt"]), tooltip=text(language, "force_tip"), pad=((0, 10), (0, 0))),
             sg.Canvas(size=(0, 0), pad=(0, 0), background_color=palette["panel"]),
         ]], pad=(0, 0), background_color=palette["panel"]),
         sg.Push(background_color=palette["panel"]),
@@ -526,8 +545,11 @@ def build_window(preferences=None):
 
 def _set_busy(window, busy):
     palette = _window_palette(window)
-    for key in ("Preview", "Match", "-IN2-", "-BROWSE_FOLDER-"):
-        window[key].update(disabled=busy)
+    for key in ("Preview", "Match", "DetectSemiMatched", "-IN2-", "-BROWSE_FOLDER-", "-CPU_THREADS-", "-RAM_BUFFER-"):
+        try:
+            window[key].update(disabled=busy)
+        except (KeyError, TypeError):
+            pass
     try:
         window["-IN_PLACE-"].update(disabled=busy)
     except (KeyError, TypeError):
@@ -630,8 +652,71 @@ def run_app():
                 window[key].update("0")
             _set_status(window, key="scanning", color="text")
             window["-PROGRESS_BAR-"].update(0)
-            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, **({"force": True} if event == "Force" else {})}, daemon=True)
+            concurrency = values.get("-CPU_THREADS-", "Auto")
+            worker = threading.Thread(target=mainProcess, args=(str(folder), window, ""), kwargs={"dry_run": event == "Preview", "cancel_event": cancel_event, "in_place": in_place, "self_heal": self_heal, "merge_takeouts": merge_takeouts, "concurrency": concurrency, **({"force": True} if event == "Force" else {})}, daemon=True)
             worker.start()
+        elif event == "DetectSemiMatched":
+            folder_str = values.get("-IN2-", "").strip()
+            folder = Path(folder_str).expanduser() if folder_str else None
+            if not folder or not folder.is_dir():
+                _set_status(window, key="invalid_folder", color="danger")
+                continue
+            from journal import detect_prior_progress
+            _set_status(window, message="Scanning prior progress & semi-matched items...", color="text")
+            window["-LOG-"].update("")
+            res = detect_prior_progress(folder)
+            _append_log(window, f"--- PRIOR PROGRESS & SEMI-MATCHED AUDIT ---")
+            _append_log(window, f"Target: {res['root']}")
+            _append_log(window, f"Media files on disk: {res['total_media']}")
+            _append_log(window, f"Remaining JSON sidecars: {res['total_jsons']}")
+            _append_log(window, f"Standalone media (no sidecars): {res['standalone_media']}")
+            if res.get("has_prior_report"):
+                _append_log(window, f"Latest journal found: {res['prior_report_file']}")
+                _append_log(window, f"  -> Previously Restored: {res['prior_restored']}")
+                _append_log(window, f"  -> Prior Errors: {res['prior_errors']}")
+                _append_log(window, f"  -> Unmatched records: {res['prior_unmatched']}")
+                window["-MATCHED-"].update(format_number(res["prior_restored"], _window_language(window)))
+                window["-ERRORS-"].update(format_number(res["prior_errors"], _window_language(window)))
+                window["-UNMATCHED-"].update(format_number(res["standalone_media"], _window_language(window)))
+            else:
+                _append_log(window, "No previous journal CSV found. Ready for first-pass restoration.")
+                window["-MATCHED-"].update("0")
+                window["-ERRORS-"].update("0")
+                window["-UNMATCHED-"].update(format_number(res["standalone_media"], _window_language(window)))
+            _set_status(window, message="Semi-matched audit complete", color="success")
+        elif event in ("-IN2-", "-CPU_THREADS-", "-RAM_BUFFER-"):
+            folder_str = values.get("-IN2-", "").strip()
+            threads_str = str(values.get("-CPU_THREADS-", "Auto"))
+            preferences = dict(window.gpm_preferences)
+            if event == "-CPU_THREADS-":
+                preferences["cpu_threads"] = threads_str
+            elif event == "-RAM_BUFFER-":
+                preferences["ram_buffer"] = str(values.get("-RAM_BUFFER-", "Auto"))
+            window.gpm_preferences = preferences
+            try:
+                save_preferences(preferences)
+            except OSError:
+                pass
+
+            def _async_calc(f_path, t_val, lang):
+                try:
+                    from governor import get_dynamic_folder_note
+                    m_thr = None
+                    if not t_val.lower().startswith("auto"):
+                        match = re.search(r"\d+", t_val)
+                        if match:
+                            m_thr = int(match.group(0))
+                    note = get_dynamic_folder_note(f_path, threads=m_thr, language=lang)
+                    window.write_event_value("-UPDATE_FOLDER_METRICS-", note)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_async_calc, args=(folder_str, threads_str, _window_language(window)), daemon=True).start()
+        elif event == "-UPDATE_FOLDER_METRICS-":
+            try:
+                window["-HARDWARE_NOTE-"].update(values["-UPDATE_FOLDER_METRICS-"])
+            except Exception:
+                pass
         elif event == "-IN_PLACE-":
             preferences = dict(window.gpm_preferences)
             preferences["in_place"] = bool(values["-IN_PLACE-"])

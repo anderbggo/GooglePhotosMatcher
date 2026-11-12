@@ -1,10 +1,13 @@
+import concurrent.futures
 import csv
 import itertools
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -12,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from exiftool_runner import exiftool_batch, run_exiftool
+from journal import CrashProofReportJournal
 from matching import (
     IMAGE_EXTENSIONS,
     AmbiguousMatchError,
@@ -588,7 +592,7 @@ def _report(root, records, in_place=False):
     return filename
 
 
-def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False, merge_takeouts=False):
+def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, cancel_event=None, force=False, in_place=False, self_heal=False, merge_takeouts=False, concurrency=None):
     try:
         root = Path(browserPath).expanduser().resolve(strict=True)
         if not root.is_dir() or root.name in {"MatchedMedia", "EditedRaw"}:
@@ -613,52 +617,113 @@ def mainProcess(browserPath, window, editedW, exiftoolPath=None, dry_run=False, 
         counts = Counter(task["status"] for task in tasks if task["status"] != "pending")
         counts["unmatched"] = sum(folder / name not in covered for folder, matcher in matchers.items() for name in matcher.names)
         window.write_event_value("-UPDATE_COUNTS-", dict(counts))
+
+        # Determine worker concurrency from user preferences / slot
+        if concurrency is None or concurrency == 1 or concurrency == "1":
+            max_workers = 1
+        elif isinstance(concurrency, str):
+            if concurrency.lower().startswith("auto"):
+                max_workers = os.cpu_count() or 4
+            else:
+                match = re.search(r"\d+", concurrency)
+                max_workers = int(match.group(0)) if match else (os.cpu_count() or 4)
+        else:
+            max_workers = max(1, int(concurrency))
+
+        # Real-time anti-corruption report journal (immediately synced to disk)
+        journal_dir = root if in_place else root / "MatchedMedia"
+        journal_dir.mkdir(parents=True, exist_ok=True)
+        journal_path = journal_dir / "matching-journal.csv"
+        journal = CrashProofReportJournal(journal_path)
+
         from governor import AdaptiveGovernor
         governor = AdaptiveGovernor()
-        with exiftool_batch():
-            for index, task in enumerate(tasks):
-                governor.govern()
-                if cancel_event is not None and cancel_event.is_set():
-                    if task["status"] == "pending":
-                        task.update(status="cancelled", details="Cancelled before writing")
-                    continue
+
+        count_lock = threading.Lock()
+        companion_lock = threading.Lock()
+        progress_lock = threading.Lock()
+        completed_count = 0
+        last_progress_update = 0.0
+
+        def _process_single_task(task, index=0):
+            nonlocal completed_count, last_progress_update
+            governor.govern()
+            if cancel_event is not None and cancel_event.is_set():
                 if task["status"] == "pending":
-                    renamed = []
-                    try:
-                        if (force or self_heal) and not dry_run:
-                            renamed = _fix_extensions(task, self_heal=self_heal and not force)
+                    task.update(status="cancelled", details="Cancelled before writing")
+                return task
+            if task["status"] == "pending":
+                renamed = []
+                try:
+                    if (force or self_heal) and not dry_run:
+                        renamed = _fix_extensions(task, self_heal=self_heal and not force)
+                    with companion_lock:
                         task["companion"] = _confirmed_companion(task, matchers[task["source"].parent], claimed_sources, exiftoolPath, self_heal)
                         if task["companion"] is not None:
                             claimed_sources.add(task["companion"])
                             if task["companion"] not in covered:
                                 covered.add(task["companion"])
-                                counts["unmatched"] -= 1
-                        if dry_run:
-                            task["status"] = "preview"
-                        else:
-                            created, warnings = _restore(task, root, exiftoolPath, force, in_place, self_heal)
-                            task["status"] = "restored" if created else "already_restored"
-                            task["details"] = "; ".join(filter(None, (task["details"], *warnings)))
-                    except Exception as error:
-                        task.update(status="error", details=str(error))
-                        try:
-                            _undo_renames(task, renamed)
-                        except OSError as rename_error:
-                            task["details"] += f"; could not restore original file name: {rename_error}"
-                        if force:
-                            _give_up(task)
+                                with count_lock:
+                                    counts["unmatched"] -= 1
+                    if dry_run:
+                        task["status"] = "preview"
+                    else:
+                        created, warnings = _restore(task, root, exiftoolPath, force, in_place, self_heal)
+                        task["status"] = "restored" if created else "already_restored"
+                        task["details"] = "; ".join(filter(None, (task["details"], *warnings)))
+                except Exception as error:
+                    task.update(status="error", details=str(error))
+                    try:
+                        _undo_renames(task, renamed)
+                    except OSError as rename_error:
+                        task["details"] += f"; could not restore original file name: {rename_error}"
+                    if force:
+                        _give_up(task)
+                with count_lock:
                     counts[task["status"]] += 1
-                window.write_event_value("-UPDATE_COUNTS-", dict(counts))
-                log(window, f"{task['status'].upper()}: {task['media'] or task['json']}" + (f" | {task['details']}" if task["details"] else ""))
-                window.write_event_value("-UPDATE_PROGRESS-", (round((index + 1) * 100 / total, 1), task["media"] or task["json"]))
+
+                # Crash-safe incremental journal write
+                journal.record(
+                    task.get("json", ""),
+                    task.get("media", ""),
+                    task.get("status", ""),
+                    task.get("rule", ""),
+                    task.get("details", ""),
+                )
+
+            with progress_lock:
+                completed_count += 1
+                now = time.monotonic()
+                if max_workers == 1 or (now - last_progress_update) >= 0.05 or completed_count == total:
+                    last_progress_update = now
+                    window.write_event_value("-UPDATE_COUNTS-", dict(counts))
+                    window.write_event_value("-UPDATE_PROGRESS-", (round(completed_count * 100 / total, 1), task["media"] or task["json"]))
+            log(window, f"{task['status'].upper()}: {task['media'] or task['json']}" + (f" | {task['details']}" if task["details"] else ""))
+            return task
+
+        if max_workers > 1:
+            def _thread_worker(t):
+                with exiftool_batch():
+                    return _process_single_task(t)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(_thread_worker, tasks))
+        else:
+            with exiftool_batch():
+                for index, task in enumerate(tasks):
+                    _process_single_task(task, index=index)
+
         records = list(tasks)
         for folder, matcher in matchers.items():
             for name in sorted(matcher.names):
                 if folder / name not in covered:
-                    records.append({"json": "", "media": str((folder / name).relative_to(root)), "status": "unmatched", "rule": "", "details": "No confirmed metadata match; original left untouched"})
+                    unmatched_rec = {"json": "", "media": str((folder / name).relative_to(root)), "status": "unmatched", "rule": "", "details": "No confirmed metadata match; original left untouched"}
+                    records.append(unmatched_rec)
+                    journal.record("", unmatched_rec["media"], "unmatched", "", unmatched_rec["details"])
+
         report_path = _report(root, records, in_place=in_place)
         summary = dict(Counter(record["status"] for record in records))
-        summary.update(report=report_path, dry_run=dry_run, cancelled=cancel_event is not None and cancel_event.is_set())
+        summary.update(report=report_path, journal=str(journal_path), dry_run=dry_run, cancelled=cancel_event is not None and cancel_event.is_set())
         log(window, f"Report: {report_path}")
         window.write_event_value("-UPDATE_SUMMARY-", summary)
         window.write_event_value("-UPDATE_DONE-", (summary.get("restored", 0), summary.get("error", 0)))

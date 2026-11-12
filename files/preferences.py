@@ -104,6 +104,10 @@ def validate_preferences(values):
         result["self_heal"] = bool(values["self_heal"])
     if "merge_takeouts" in values:
         result["merge_takeouts"] = bool(values["merge_takeouts"])
+    if "cpu_threads" in values:
+        result["cpu_threads"] = values["cpu_threads"]
+    if "ram_buffer" in values:
+        result["ram_buffer"] = values["ram_buffer"]
     return result
 
 

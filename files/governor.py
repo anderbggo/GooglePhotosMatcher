@@ -51,9 +51,6 @@ def get_hardware_specs():
 
     ram_gb = max(2, round(ram_bytes / (1024 ** 3)))
 
-    # Real-world benchmark rate:
-    # Single-thread ExifTool writes ~15-20 files/sec on SSD.
-    # Scaled concurrency factor bounded by storage I/O and ExifTool Perl daemon throughput.
     rate = min(60, 15 + min(cores, 16) * 2.5)
     est_files = int(round((rate * 18 * 60) / 500) * 500)
     est_gb = max(5, int(round(est_files * 0.005)))
@@ -69,12 +66,84 @@ def get_hardware_specs():
     }
 
 
+def inspect_folder_metrics(folder_path):
+    """Fast folder scanner to compute exact file count and total size."""
+    if not folder_path:
+        return None
+    try:
+        from pathlib import Path
+        folder = Path(folder_path).resolve()
+        if not folder.is_dir():
+            return None
+        total_files = 0
+        total_bytes = 0
+        for dirpath, dirnames, filenames in os.walk(folder):
+            dirnames[:] = [d for d in dirnames if d not in {".git", ".gpm-scratch"}]
+            for name in filenames:
+                total_files += 1
+                try:
+                    total_bytes += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+        gb = total_bytes / (1024 ** 3)
+        mb = total_bytes / (1024 ** 2)
+        size_str = f"{gb:.1f} GB" if gb >= 1.0 else f"{mb:.1f} MB"
+        return {
+            "total_files": total_files,
+            "total_bytes": total_bytes,
+            "size_str": size_str,
+        }
+    except Exception:
+        return None
+
+
+def calculate_dynamic_eta(file_count, threads=None, ram_gb=None):
+    """Calculate real-world processing time based on actual files and allocated threads."""
+    if not file_count or file_count <= 0:
+        return "0s"
+    specs = get_hardware_specs()
+    threads = threads or specs["cores"]
+    # Base throughput per worker with stay_open ExifTool daemon: ~18 files/sec
+    concurrency_efficiency = 0.88 if threads > 1 else 1.0
+    throughput = max(15.0, (18.0 * threads * concurrency_efficiency))
+    seconds = file_count / throughput
+    if seconds < 60:
+        return f"~{max(1, round(seconds))}s"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"~{minutes:.1f} mins"
+    hours = minutes / 60
+    return f"~{hours:.1f} hrs"
+
+
 def get_hardware_note(language="en"):
-    """Return a formatted hardware capability and throughput estimate note."""
+    """Return a clean system hardware capability note."""
     specs = get_hardware_specs()
     if language == "es":
         specs["est_files"] = specs["est_files"].replace(",", ".")
     return text(language, "hardware_note", **specs)
+
+
+def get_dynamic_folder_note(folder_path=None, threads=None, language="en"):
+    """Generate dynamic folder metrics and real ETA based on selected folder and threads."""
+    metrics = inspect_folder_metrics(folder_path)
+    specs = get_hardware_specs()
+    active_threads = threads or specs["cores"]
+    if not metrics or metrics["total_files"] == 0:
+        return get_hardware_note(language)
+    eta = calculate_dynamic_eta(metrics["total_files"], threads=active_threads, ram_gb=specs["ram_gb"])
+    total_files_formatted = f"{metrics['total_files']:,}"
+    if language == "es":
+        total_files_formatted = total_files_formatted.replace(",", ".")
+    return text(
+        language,
+        "folder_dynamic_note",
+        total_files=total_files_formatted,
+        size_str=metrics["size_str"],
+        eta=eta,
+        threads=active_threads,
+        ram_gb=specs["ram_gb"],
+    )
 
 
 class AdaptiveGovernor:
